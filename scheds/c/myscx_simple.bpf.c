@@ -41,16 +41,13 @@ UEI_DEFINE(uei);
  */
 #define SHARED_DSQ 0
 
-// stats という MAP を定義
-// ユーザ空間側から定期的に読みに来てたMAP
-// 定義しているマップは BPF_MAP_TYPE_PERCPU_ARRAY で，key-value やエントリ数の設定も一緒にしている
-// エントリ数2のkey-value型マップ．各エントリには，それぞれ localキューとglobalキューにenqeueされたタスクの数が格納される
+// counter という MAP を定義
 struct {
 	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
 	__uint(key_size, sizeof(u32));
 	__uint(value_size, sizeof(u64));
 	__uint(max_entries, 2);			/* [local, global] */
-} stats SEC(".maps");
+} counter SEC(".maps");
 
 // MAP のあるエントリの値をインクリメント
 static void stat_inc(u32 idx)
