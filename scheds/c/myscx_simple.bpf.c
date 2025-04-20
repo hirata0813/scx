@@ -44,7 +44,7 @@ UEI_DEFINE(uei);
 // counter という MAP を定義
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY); //ハマった箇所
-	//BPF_MAP_TYPE_ARRAYは，エントリがCPUごとに別れているため，値が入ってないエントリに対応するCPUで動いているプロセスがMAPを読みに行くと，変な値が出力される
+	//BPF_MAP_TYPE_PERCPU_ARRAYは，エントリがCPUごとに別れているため，値が入ってないエントリに対応するCPUで動いているプロセスがMAPを読みに行くと，変な値が出力される
 	__uint(key_size, sizeof(u32));
 	__uint(value_size, sizeof(u32));//ハマった箇所
 	__uint(max_entries, 2);
