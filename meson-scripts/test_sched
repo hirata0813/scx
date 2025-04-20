@@ -32,6 +32,7 @@ if [ $# -ge 2 ] ; then
     SCHEDS[$2]="-v"
 else
     SCHEDS["scx_simple"]="-v"
+    SCHEDS["myscx_simple"]="-v"
     SCHEDS["scx_central"]="-v"
     SCHEDS["scx_nest"]="-v"
     SCHEDS["scx_flatcg"]="-v"

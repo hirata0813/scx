@@ -10,7 +10,7 @@
 #include <libgen.h> //ファイルパス解析用
 #include <bpf/bpf.h> // libbpf の API 利用のため？
 #include <scx/common.h> // scx 関連．パスはおそらく scx/scheds/include/scx/
-#include "scx_simple.bpf.skel.h" //eBPF スケジューラのスケルトン(BPF コードとのインタフェース)
+#include "myscx_simple.bpf.skel.h" //eBPF スケジューラのスケルトン(BPF コードとのインタフェース)
 
 // ヘルプメッセージ用配列
 const char help_fmt[] =
@@ -40,31 +40,28 @@ static void sigint_handler(int simple)
 	exit_req = 1;
 }
 
-// skelを通じて，BPF MAP(skel->maps.stats) にアクセスし，情報を取得？
-static void read_stats(struct scx_simple *skel, __u64 *stats)
+// skelを通じて，BPF MAP(skel->maps.counter) にアクセスし，値を書き込む
+static void write_num(struct myscx_simple *skel, __u32 *num_p)
 {
-	int nr_cpus = libbpf_num_possible_cpus(); //利用可能な CPU数を取得
-	__u64 cnts[2][nr_cpus]; //2次元配列を定義
 	__u32 idx;
+	__u32 val;
+	__u32 fd = bpf_map__fd(skel->maps.counter);
 
-	memset(stats, 0, sizeof(stats[0]) * 2); //stats の一番最後の文字を0にする？
+	if (fd < 0)
+		return;
 
 	for (idx = 0; idx < 2; idx++) {
-		int ret, cpu;
-
-		ret = bpf_map_lookup_elem(bpf_map__fd(skel->maps.stats),
-					  &idx, cnts[idx]);
-		if (ret < 0)
-			continue;
-		for (cpu = 0; cpu < nr_cpus; cpu++)
-			stats[idx] += cnts[idx][cpu];
+		int ret;
+		val = (*num_p)*(idx+1);
+		ret = bpf_map_update_elem(fd, &idx, &val, 0);
 	}
 }
+
 
 // 定義されている関数は3つ
 int main(int argc, char **argv)
 {
-	struct scx_simple *skel;
+	struct myscx_simple *skel;
 	struct bpf_link *link;
 	__u32 opt;
 	__u64 ecode;
@@ -73,7 +70,7 @@ int main(int argc, char **argv)
 	signal(SIGINT, sigint_handler); //SIGINT 受信後の処理を sigint_handler により行う
 	signal(SIGTERM, sigint_handler); //SIGTERM 受信後の処理を sigint_handler により行う
 restart:
-	skel = SCX_OPS_OPEN(simple_ops, scx_simple);
+	skel = SCX_OPS_OPEN(simple_ops, myscx_simple);
 
 	// 引数解析(引数なしの場合，そもそもこのループでの処理はない)
 	while ((opt = getopt(argc, argv, "fvh")) != -1) { //引数のうち，f，v，h が入るものを取り出していく
@@ -90,23 +87,25 @@ restart:
 		}
 	}
 
-	SCX_OPS_LOAD(skel, simple_ops, scx_simple, uei); //eBPFプログラムのロード？
-	link = SCX_OPS_ATTACH(skel, simple_ops, scx_simple); //eBPFプログラムのトレースポイントへのアタッチ？
+	SCX_OPS_LOAD(skel, simple_ops, myscx_simple, uei); //eBPFプログラムのロード？
+	link = SCX_OPS_ATTACH(skel, simple_ops, myscx_simple); //eBPFプログラムのトレースポイントへのアタッチ？
+
+	__u32 num=0;
 
 	while (!exit_req && !UEI_EXITED(skel, uei)) { //プログラムが終了するまで？
-		__u64 stats[2];
 
-		read_stats(skel, stats);
-		printf("local=%llu global=%llu\n", stats[0], stats[1]);
+		write_num(skel, &num);
+		//printf("local=%llu global=%llu\n", stats[0], stats[1]);
 		fflush(stdout);
-		sleep(1);
+		sleep(5);
+		num++;
 	}
 
 	//以降の処理は，SIGINT などで上記ループを抜けたあとに実行される
 	//多分eBPFプログラムの後始末？
 	bpf_link__destroy(link);
 	ecode = UEI_REPORT(skel, uei);
-	scx_simple__destroy(skel);
+	myscx_simple__destroy(skel);
 
 	if (UEI_ECODE_RESTART(ecode))
 		goto restart;
