@@ -43,18 +43,22 @@ UEI_DEFINE(uei);
 
 // counter という MAP を定義
 struct {
-	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+	__uint(type, BPF_MAP_TYPE_ARRAY); //ハマった箇所
+	//BPF_MAP_TYPE_ARRAYは，エントリがCPUごとに別れているため，値が入ってないエントリに対応するCPUで動いているプロセスがMAPを読みに行くと，変な値が出力される
 	__uint(key_size, sizeof(u32));
-	__uint(value_size, sizeof(u64));
-	__uint(max_entries, 2);			/* [local, global] */
+	__uint(value_size, sizeof(u32));//ハマった箇所
+	__uint(max_entries, 2);
 } counter SEC(".maps");
 
-// MAP のあるエントリの値をインクリメント
-static void stat_inc(u32 idx)
+// counter の値を読み，出力
+static void print_counter()
 {
-	u64 *cnt_p = bpf_map_lookup_elem(&stats, &idx);
-	if (cnt_p)
-		(*cnt_p)++;
+	int zero=0, one=1;
+	u32* num0_p = bpf_map_lookup_elem(&counter, &zero);
+	u32* num1_p = bpf_map_lookup_elem(&counter, &one); ///ハマった箇所
+
+	if (num0_p && num1_p)
+		bpf_printk("Entry1: %d, Entry2: %d", *num0_p, *num1_p);
 }
 
 // 以降は，おそらく BPF_STRUCT_OPS() として，関数定義をしている
@@ -70,7 +74,7 @@ s32 BPF_STRUCT_OPS(simple_select_cpu, struct task_struct *p, s32 prev_cpu, u64 w
 	cpu = scx_bpf_select_cpu_dfl(p, prev_cpu, wake_flags, &is_idle); // 左の関数は，ops.select_cpu()のデフォルト実装
 	// 選択されたCPUがアイドル状態なら，id_idleにtrueが書き込まれる
 	if (is_idle) {
-		stat_inc(0);	/* count local queueing */
+		print_counter();
 		scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL, SCX_SLICE_DFL, 0); // 選択されたCPUのローカルDSQにタスクを挿入
 	}
 
@@ -85,7 +89,7 @@ s32 BPF_STRUCT_OPS(simple_select_cpu, struct task_struct *p, s32 prev_cpu, u64 w
 //上記点に気をつけて実装する必要がある．
 void BPF_STRUCT_OPS(simple_enqueue, struct task_struct *p, u64 enq_flags)
 {
-	stat_inc(1);	/* count global queueing */
+	print_counter();
 
 	if (fifo_sched) { //FIFOが有効化(つまり，ユーザ空間で-fオプションがついている)場合
 		scx_bpf_dsq_insert(p, SHARED_DSQ, SCX_SLICE_DFL, enq_flags); // グローバルDSQに挿入する
