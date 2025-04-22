@@ -53,6 +53,15 @@ pub struct SchedulerOpts {
     #[clap(short = 'd', long, action = clap::ArgAction::SetTrue)]
     pub dispatch_pick2_disable: bool,
 
+    /// Enables pick2 load balancing on the dispatch path when LLC utilization is under the
+    /// specified utilization.
+    #[clap(long, default_value = "75", value_parser = clap::value_parser!(u64).range(0..100))]
+    pub dispatch_lb_busy: u64,
+
+    /// Enables pick2 load balancing on the dispatch path for interactive tasks.
+    #[clap(long, action = clap::ArgAction::SetTrue)]
+    pub dispatch_lb_interactive: bool,
+
     /// Enable tasks to run beyond their timeslice if the CPU is idle.
     #[clap(long, action = clap::ArgAction::SetTrue)]
     pub keep_running: bool,
@@ -60,6 +69,10 @@ pub struct SchedulerOpts {
     /// Minimum load for load balancing on the wakeup path, 0 to disable.
     #[clap(long, default_value = "0", value_parser = clap::value_parser!(u64).range(0..99))]
     pub wakeup_lb_busy: u64,
+
+    /// Allow LLC migrations on the wakeup path.
+    #[clap(long, action = clap::ArgAction::SetTrue)]
+    pub wakeup_llc_migrations: bool,
 
     /// Set idle QoS resume latency based in microseconds.
     #[clap(long)]
@@ -179,6 +192,8 @@ macro_rules! init_open_skel {
             $skel.maps.rodata_data.autoslice = opts.autoslice;
             $skel.maps.rodata_data.debug = verbose as u32;
             $skel.maps.rodata_data.dispatch_pick2_disable = opts.dispatch_pick2_disable;
+            $skel.maps.rodata_data.dispatch_lb_busy = opts.dispatch_lb_busy;
+            $skel.maps.rodata_data.dispatch_lb_interactive = opts.dispatch_lb_interactive;
             $skel.maps.rodata_data.eager_load_balance = !opts.eager_load_balance;
             $skel.maps.rodata_data.has_little_cores = $crate::TOPO.has_little_cores();
             $skel.maps.rodata_data.interactive_sticky = opts.interactive_sticky;
@@ -187,6 +202,7 @@ macro_rules! init_open_skel {
             $skel.maps.rodata_data.smt_enabled = $crate::TOPO.smt_enabled;
             $skel.maps.rodata_data.select_idle_in_enqueue = true;
             $skel.maps.rodata_data.wakeup_lb_busy = opts.wakeup_lb_busy;
+            $skel.maps.rodata_data.wakeup_llc_migrations = opts.wakeup_llc_migrations;
 
             Ok(())
         }

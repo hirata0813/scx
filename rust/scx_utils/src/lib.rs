@@ -30,6 +30,7 @@
 //! Utility modules which can be useful for userspace component of sched_ext
 //! schedulers.
 
+pub use log::info;
 pub use log::warn;
 pub use paste::paste;
 
@@ -84,6 +85,8 @@ mod gpu;
 mod infeasible;
 pub use infeasible::LoadAggregator;
 pub use infeasible::LoadLedger;
+
+pub mod mangoapp;
 
 pub mod misc;
 pub use misc::monitor_stats;
