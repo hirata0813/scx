@@ -1,9 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
-/*
- * Copyright (c) 2022 Meta Platforms, Inc. and affiliates.
- * Copyright (c) 2022 Tejun Heo <tj@kernel.org>
- * Copyright (c) 2022 David Vernet <dvernet@meta.com>
- */
 #include <stdio.h>
 #include <unistd.h> // POSIX 標準との互換性
 #include <signal.h> // シグナルを処理するためのマクロ定義
@@ -45,16 +39,16 @@ static void write_num(struct scx_ctrl *skel, __u32 *num_p)
 {
 	__u32 idx;
 	__u32 val;
-	__u32 fd = bpf_map__fd(skel->maps.counter);
+	__u32 fd = bpf_map__fd(skel->maps.pidlist);
 
 	if (fd < 0)
 		return;
 
-	for (idx = 0; idx < 2; idx++) {
-		int ret;
-		val = (*num_p)*(idx+1);
-		ret = bpf_map_update_elem(fd, &idx, &val, 0);
-	}
+	//for (idx = 0; idx < 2; idx++) {
+	//	int ret;
+	//	val = (*num_p)*(idx+1);
+	//	ret = bpf_map_update_elem(fd, &idx, &val, 0);
+	//}
 }
 
 
@@ -89,13 +83,16 @@ restart:
 
 	SCX_OPS_LOAD(skel, simple_ops, scx_ctrl, uei); //eBPFプログラムのロード？
 	link = SCX_OPS_ATTACH(skel, simple_ops, scx_ctrl); //eBPFプログラムのトレースポイントへのアタッチ？
+	
+	// TODO: SL 起動
 
 	__u32 num=0;
 
 	while (!exit_req && !UEI_EXITED(skel, uei)) { //プログラムが終了するまで？
+		//TODO: スケジューリング対象から PID 受信(ノンブロッキングで)
+		//TODO 定期的に BPF MAP を更新(PID書き込み，flagアップデートなど)
 
 		write_num(skel, &num);
-		//printf("local=%llu global=%llu\n", stats[0], stats[1]);
 		fflush(stdout);
 		sleep(5);
 		num++;
