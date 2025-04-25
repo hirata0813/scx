@@ -39,7 +39,7 @@ static void sigint_handler(int simple)
 static void update_map(struct scx_ctrl *skel, __u32 *pid, __u32 *flag)
 {
 	__u32 fd = bpf_map__fd(skel->maps.pidlist);
-	bpf_map_update_elem(fd, &pid, flag, BPF_ANY);
+	bpf_map_update_elem(fd, pid, flag, BPF_ANY);
 }
 
 static void print_map(struct scx_ctrl *skel, __u32 *pid)
@@ -47,7 +47,7 @@ static void print_map(struct scx_ctrl *skel, __u32 *pid)
 	__u32 ret;
 	__u32 value;
 	__u32 fd = bpf_map__fd(skel->maps.pidlist);
-	ret = bpf_map_lookup_elem(fd, &pid, &value);
+	ret = bpf_map_lookup_elem(fd, pid, &value);
 	if (ret == 0)
 	    printf("Key: %d, Value: %d\n", *pid, value);
 	else
