@@ -39,7 +39,7 @@ s32 BPF_STRUCT_OPS(simple_select_cpu, struct task_struct *p, s32 prev_cpu, u64 w
 	// TODO: MAPで管理してないやつは普通にスケジューリングする
 	// TODO: MAPで管理してるやつは，flagをもとにスケジューリングする
 	if (is_idle) {
-		pid = get_pid(p);
+		pid = get_pid();
 		bpf_printk("simple_select_cpu %d", pid);
 		scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL, SCX_SLICE_DFL, 0); // 選択されたCPUのローカルDSQにタスクを挿入
 	}
@@ -50,7 +50,7 @@ s32 BPF_STRUCT_OPS(simple_select_cpu, struct task_struct *p, s32 prev_cpu, u64 w
 void BPF_STRUCT_OPS(simple_enqueue, struct task_struct *p, u64 enq_flags)
 {
 	s32 pid;
-	pid = get_pid(p);
+	pid = get_pid();
 	bpf_printk("simple_enqueue %d", pid);
 
 	// TODO: MAPで管理してないやつは普通にスケジューリングする
