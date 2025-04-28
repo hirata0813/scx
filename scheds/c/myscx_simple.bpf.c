@@ -68,13 +68,14 @@ static void print_counter()
 // この関数は，タスクがwakeしたときに呼ばれる
 s32 BPF_STRUCT_OPS(simple_select_cpu, struct task_struct *p, s32 prev_cpu, u64 wake_flags)
 {
+	bpf_printk("1");
 	bool is_idle = false;
 	s32 cpu; //s32 は，signed 32-bit integer
 
 	cpu = scx_bpf_select_cpu_dfl(p, prev_cpu, wake_flags, &is_idle); // 左の関数は，ops.select_cpu()のデフォルト実装
 	// 選択されたCPUがアイドル状態なら，id_idleにtrueが書き込まれる
 	if (is_idle) {
-		print_counter();
+		//print_counter();
 		scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL, SCX_SLICE_DFL, 0); // 選択されたCPUのローカルDSQにタスクを挿入
 	}
 
@@ -89,7 +90,8 @@ s32 BPF_STRUCT_OPS(simple_select_cpu, struct task_struct *p, s32 prev_cpu, u64 w
 //上記点に気をつけて実装する必要がある．
 void BPF_STRUCT_OPS(simple_enqueue, struct task_struct *p, u64 enq_flags)
 {
-	print_counter();
+	bpf_printk("2");
+	//print_counter();
 
 	if (fifo_sched) { //FIFOが有効化(つまり，ユーザ空間で-fオプションがついている)場合
 		scx_bpf_dsq_insert(p, SHARED_DSQ, SCX_SLICE_DFL, enq_flags); // グローバルDSQに挿入する
@@ -111,11 +113,13 @@ void BPF_STRUCT_OPS(simple_enqueue, struct task_struct *p, u64 enq_flags)
 
 void BPF_STRUCT_OPS(simple_dispatch, s32 cpu, struct task_struct *prev)
 {
+	bpf_printk("3");
 	scx_bpf_dsq_move_to_local(SHARED_DSQ);
 }
 
 void BPF_STRUCT_OPS(simple_running, struct task_struct *p)
 {
+	bpf_printk("4");
 	if (fifo_sched)
 		return;
 
@@ -131,6 +135,7 @@ void BPF_STRUCT_OPS(simple_running, struct task_struct *p)
 
 void BPF_STRUCT_OPS(simple_stopping, struct task_struct *p, bool runnable)
 {
+	bpf_printk("5");
 	if (fifo_sched)
 		return;
 
@@ -148,16 +153,19 @@ void BPF_STRUCT_OPS(simple_stopping, struct task_struct *p, bool runnable)
 
 void BPF_STRUCT_OPS(simple_enable, struct task_struct *p)
 {
+	bpf_printk("6");
 	p->scx.dsq_vtime = vtime_now;
 }
 
 s32 BPF_STRUCT_OPS_SLEEPABLE(simple_init)
 {
+	bpf_printk("7");
 	return scx_bpf_create_dsq(SHARED_DSQ, -1);
 }
 
 void BPF_STRUCT_OPS(simple_exit, struct scx_exit_info *ei)
 {
+	bpf_printk("8");
 	UEI_RECORD(uei, ei);
 }
 

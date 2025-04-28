@@ -8,7 +8,7 @@ int main() {
     pid_t pid = getpid();
     printf("In program: pid=%d\n", (int)pid);
 
-    for(i=0; i<1000; i++){
+    for(i=0; i<100; i++){
 	printf("i:%d\n", i);
 	sleep(1);
     }

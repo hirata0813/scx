@@ -13,6 +13,7 @@ UEI_DEFINE(uei);
 #define SHARED_DSQ 0
 #define STOP 1
 #define RUN 0
+#define DEFAULT 2
 
 // PID LIST という MAP を定義
 // 1エントリに必要な情報：PID，フラグ(キューイングするかしないか)
@@ -34,10 +35,15 @@ static int check_process_status(__u32 *pid)
 {
 	__u32 *flag;
 	flag = bpf_map_lookup_elem(&pidlist, pid);
-	if (flag && *flag == 1) //flagが1(つまり，MAPにPIDが存在し，そのflagが1)のとき
-	    return STOP;
-	else
-	    return RUN;
+	if (flag){
+		if (*flag == 1) 
+		    return STOP;//MAPにPIDが存在し，そのflagが1のとき
+		else
+		    return RUN;//MAPにPIDが存在し，そのflagが0のとき
+	} else {
+	    return DEFAULT; // MAP に登録されていないプロセスのとき
+
+	} 
 }
 
 
@@ -53,9 +59,15 @@ s32 BPF_STRUCT_OPS(simple_select_cpu, struct task_struct *p, s32 prev_cpu, u64 w
 	// TODO: MAPで管理してないやつは普通にスケジューリングする
 	// TODO: MAPで管理してるやつは，flagをもとにスケジューリングする
 	if (is_idle) {
-		if (check_process_status(&pid) == RUN){
-			bpf_printk("simple_select_cpu %d", pid);
-			scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL, SCX_SLICE_DFL, 0); // 選択されたCPUのローカルDSQにタスクを挿入
+		if (check_process_status(&pid) == DEFAULT){
+			//bpf_printk("RUN! PID: %d", pid);
+		}else{
+			bpf_printk("select_cpu:IDLE");
+		}
+		scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL, SCX_SLICE_DFL, 0); // 選択されたCPUのローカルDSQにタスクを挿入
+	}else{
+		if (check_process_status(&pid) != DEFAULT){
+			bpf_printk("select_cpu:NOT-IDLE");
 		}
 	}
 
@@ -66,39 +78,55 @@ void BPF_STRUCT_OPS(simple_enqueue, struct task_struct *p, u64 enq_flags)
 {
 	s32 pid;
 	pid = get_pid();
-	bpf_printk("simple_enqueue %d", pid);
 
 	// TODO: MAPで管理してないやつは普通にスケジューリングする
 	// TODO: MAPで管理してるやつは，flagをもとにスケジューリングする
 	if (fifo_sched) { //FIFOが有効化(つまり，ユーザ空間で-fオプションがついている)場合
 		scx_bpf_dsq_insert(p, SHARED_DSQ, SCX_SLICE_DFL, enq_flags); // グローバルDSQに挿入する
 	} else {
-		if (check_process_status(&pid) == RUN){
-
-			u64 vtime = p->scx.dsq_vtime;
-
-			/*
-			 * Limit the amount of budget that an idling task can accumulate
-			 * to one slice.
-			 */
-			if (time_before(vtime, vtime_now - SCX_SLICE_DFL)) //time_beforeは，第一引数の時刻が第二引数の時刻より前なら，trueを返す
-									   //common.bpf.h 内で定義されている
-				vtime = vtime_now - SCX_SLICE_DFL;
-
-			scx_bpf_dsq_insert_vtime(p, SHARED_DSQ, SCX_SLICE_DFL, vtime,
-						 enq_flags);
-
+		if (check_process_status(&pid) == DEFAULT){
+			//bpf_printk("RUN! PID: %d", pid);
+		}else{
+			bpf_printk("enqueue");
 		}
+		u64 vtime = p->scx.dsq_vtime;
+
+		/*
+		 * Limit the amount of budget that an idling task can accumulate
+		 * to one slice.
+		 */
+		if (time_before(vtime, vtime_now - SCX_SLICE_DFL)) //time_beforeは，第一引数の時刻が第二引数の時刻より前なら，trueを返す
+								   //common.bpf.h 内で定義されている
+			vtime = vtime_now - SCX_SLICE_DFL;
+
+		scx_bpf_dsq_insert_vtime(p, SHARED_DSQ, SCX_SLICE_DFL, vtime,
+					 enq_flags);
+
+		
 	}
 }
 
 void BPF_STRUCT_OPS(simple_dispatch, s32 cpu, struct task_struct *prev)
 {
+	s32 pid;
+	pid = get_pid();
+	if (check_process_status(&pid) == DEFAULT){
+		//bpf_printk("RUN! PID: %d", pid);
+	}else{
+		bpf_printk("dispatch");
+	}
 	scx_bpf_dsq_move_to_local(SHARED_DSQ);
 }
 
 void BPF_STRUCT_OPS(simple_running, struct task_struct *p)
 {
+	s32 pid;
+	pid = get_pid();
+	if (check_process_status(&pid) == DEFAULT){
+		//bpf_printk("RUN! PID: %d", pid);
+	}else{
+		bpf_printk("running");
+	}
 	if (fifo_sched)
 		return;
 
@@ -114,6 +142,13 @@ void BPF_STRUCT_OPS(simple_running, struct task_struct *p)
 
 void BPF_STRUCT_OPS(simple_stopping, struct task_struct *p, bool runnable)
 {
+	s32 pid;
+	pid = get_pid();
+	if (check_process_status(&pid) == DEFAULT){
+		//bpf_printk("RUN! PID: %d", pid);
+	}else{
+		bpf_printk("stopping");
+	}
 	if (fifo_sched)
 		return;
 
@@ -131,16 +166,25 @@ void BPF_STRUCT_OPS(simple_stopping, struct task_struct *p, bool runnable)
 
 void BPF_STRUCT_OPS(simple_enable, struct task_struct *p)
 {
+	s32 pid;
+	pid = get_pid();
+	if (check_process_status(&pid) == DEFAULT){
+		//bpf_printk("RUN! PID: %d", pid);
+	}else{
+		bpf_printk("enable");
+	}
 	p->scx.dsq_vtime = vtime_now;
 }
 
 s32 BPF_STRUCT_OPS_SLEEPABLE(simple_init)
 {
+	bpf_printk("init");
 	return scx_bpf_create_dsq(SHARED_DSQ, -1);
 }
 
 void BPF_STRUCT_OPS(simple_exit, struct scx_exit_info *ei)
 {
+	bpf_printk("exit");
 	UEI_RECORD(uei, ei);
 }
 
