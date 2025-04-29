@@ -56,15 +56,17 @@ s32 BPF_STRUCT_OPS(simple_select_cpu, struct task_struct *p, s32 prev_cpu, u64 w
 	cpu = scx_bpf_select_cpu_dfl(p, prev_cpu, wake_flags, &is_idle); // 左の関数は，ops.select_cpu()のデフォルト実装
 	// 選択されたCPUがアイドル状態なら，id_idleにtrueが書き込まれる
 	
-	// TODO: MAPで管理してないやつは普通にスケジューリングする
-	// TODO: MAPで管理してるやつは，flagをもとにスケジューリングする
 	if (is_idle) {
-		if (check_process_status(&pid) == DEFAULT){
+		if (check_process_status(&pid) != DEFAULT){
+			bpf_printk("select_cpu:IDLE");
+		}
+
+		if (check_process_status(&pid) != STOP){
 			//bpf_printk("RUN! PID: %d", pid);
+			scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL, SCX_SLICE_DFL, 0); // 選択されたCPUのローカルDSQにタスクを挿入
 		}else{
 			bpf_printk("select_cpu:IDLE");
 		}
-		scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL, SCX_SLICE_DFL, 0); // 選択されたCPUのローカルDSQにタスクを挿入
 	}else{
 		if (check_process_status(&pid) != DEFAULT){
 			bpf_printk("select_cpu:NOT-IDLE");
@@ -79,30 +81,25 @@ void BPF_STRUCT_OPS(simple_enqueue, struct task_struct *p, u64 enq_flags)
 	s32 pid;
 	pid = get_pid();
 
-	// TODO: MAPで管理してないやつは普通にスケジューリングする
-	// TODO: MAPで管理してるやつは，flagをもとにスケジューリングする
 	if (fifo_sched) { //FIFOが有効化(つまり，ユーザ空間で-fオプションがついている)場合
 		scx_bpf_dsq_insert(p, SHARED_DSQ, SCX_SLICE_DFL, enq_flags); // グローバルDSQに挿入する
 	} else {
-		if (check_process_status(&pid) == DEFAULT){
-			//bpf_printk("RUN! PID: %d", pid);
+		if (check_process_status(&pid) != STOP){
+			u64 vtime = p->scx.dsq_vtime;
+
+			/*
+			 * Limit the amount of budget that an idling task can accumulate
+			 * to one slice.
+			 */
+			if (time_before(vtime, vtime_now - SCX_SLICE_DFL)) //time_beforeは，第一引数の時刻が第二引数の時刻より前なら，trueを返す
+									   //common.bpf.h 内で定義されている
+				vtime = vtime_now - SCX_SLICE_DFL;
+
+			scx_bpf_dsq_insert_vtime(p, SHARED_DSQ, SCX_SLICE_DFL, vtime,
+						 enq_flags);
 		}else{
 			bpf_printk("enqueue");
 		}
-		u64 vtime = p->scx.dsq_vtime;
-
-		/*
-		 * Limit the amount of budget that an idling task can accumulate
-		 * to one slice.
-		 */
-		if (time_before(vtime, vtime_now - SCX_SLICE_DFL)) //time_beforeは，第一引数の時刻が第二引数の時刻より前なら，trueを返す
-								   //common.bpf.h 内で定義されている
-			vtime = vtime_now - SCX_SLICE_DFL;
-
-		scx_bpf_dsq_insert_vtime(p, SHARED_DSQ, SCX_SLICE_DFL, vtime,
-					 enq_flags);
-
-		
 	}
 }
 
@@ -110,9 +107,7 @@ void BPF_STRUCT_OPS(simple_dispatch, s32 cpu, struct task_struct *prev)
 {
 	s32 pid;
 	pid = get_pid();
-	if (check_process_status(&pid) == DEFAULT){
-		//bpf_printk("RUN! PID: %d", pid);
-	}else{
+	if (check_process_status(&pid) != DEFAULT){
 		bpf_printk("dispatch");
 	}
 	scx_bpf_dsq_move_to_local(SHARED_DSQ);
@@ -122,9 +117,7 @@ void BPF_STRUCT_OPS(simple_running, struct task_struct *p)
 {
 	s32 pid;
 	pid = get_pid();
-	if (check_process_status(&pid) == DEFAULT){
-		//bpf_printk("RUN! PID: %d", pid);
-	}else{
+	if (check_process_status(&pid) != DEFAULT){
 		bpf_printk("running");
 	}
 	if (fifo_sched)
@@ -144,9 +137,7 @@ void BPF_STRUCT_OPS(simple_stopping, struct task_struct *p, bool runnable)
 {
 	s32 pid;
 	pid = get_pid();
-	if (check_process_status(&pid) == DEFAULT){
-		//bpf_printk("RUN! PID: %d", pid);
-	}else{
+	if (check_process_status(&pid) != DEFAULT){
 		bpf_printk("stopping");
 	}
 	if (fifo_sched)
@@ -168,9 +159,7 @@ void BPF_STRUCT_OPS(simple_enable, struct task_struct *p)
 {
 	s32 pid;
 	pid = get_pid();
-	if (check_process_status(&pid) == DEFAULT){
-		//bpf_printk("RUN! PID: %d", pid);
-	}else{
+	if (check_process_status(&pid) != DEFAULT){
 		bpf_printk("enable");
 	}
 	p->scx.dsq_vtime = vtime_now;
