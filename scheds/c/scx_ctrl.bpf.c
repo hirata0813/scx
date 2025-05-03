@@ -66,6 +66,8 @@ s32 BPF_STRUCT_OPS(simple_select_cpu, struct task_struct *p, s32 prev_cpu, u64 w
 			scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL, SCX_SLICE_DFL, 0); // 選択されたCPUのローカルDSQにタスクを挿入
 		}else{
 			bpf_printk("select_cpu:IDLE");
+			//scx_bpf_dsq_insert(p, 4, 20000000, 0); // IDが4のローカルDSQにタスクを挿入
+			scx_bpf_dsq_insert(p, 4, SCX_SLICE_DFL, 0); // IDが4のローカルDSQにタスクを挿入
 		}
 	}else{
 		if (check_process_status(&pid) != DEFAULT){
@@ -84,20 +86,18 @@ void BPF_STRUCT_OPS(simple_enqueue, struct task_struct *p, u64 enq_flags)
 	if (fifo_sched) { //FIFOが有効化(つまり，ユーザ空間で-fオプションがついている)場合
 		scx_bpf_dsq_insert(p, SHARED_DSQ, SCX_SLICE_DFL, enq_flags); // グローバルDSQに挿入する
 	} else {
+		u64 vtime = p->scx.dsq_vtime;
 		if (check_process_status(&pid) != STOP){
-			u64 vtime = p->scx.dsq_vtime;
 
-			/*
-			 * Limit the amount of budget that an idling task can accumulate
-			 * to one slice.
-			 */
-			if (time_before(vtime, vtime_now - SCX_SLICE_DFL)) //time_beforeは，第一引数の時刻が第二引数の時刻より前なら，trueを返す
-									   //common.bpf.h 内で定義されている
+			if (time_before(vtime, vtime_now - SCX_SLICE_DFL)) //time_beforeは，第一引数の時刻が第二引数の時刻より前なら，trueを返す common.bpf.h 内で定義されている
 				vtime = vtime_now - SCX_SLICE_DFL;
+			scx_bpf_dsq_insert_vtime(p, SHARED_DSQ, SCX_SLICE_DFL, vtime, enq_flags);
 
-			scx_bpf_dsq_insert_vtime(p, SHARED_DSQ, SCX_SLICE_DFL, vtime,
-						 enq_flags);
 		}else{
+			//scx_bpf_dsq_insert(p, 4, 10000000000000, 0); // IDが4のDSQにタスクを挿入
+			if (time_before(vtime, vtime_now - SCX_SLICE_DFL)) //time_beforeは，第一引数の時刻が第二引数の時刻より前なら，trueを返す common.bpf.h 内で定義されている
+				vtime = vtime_now - SCX_SLICE_DFL;
+			scx_bpf_dsq_insert_vtime(p, 4, SCX_SLICE_DFL, vtime, enq_flags);
 			bpf_printk("enqueue");
 		}
 	}
@@ -110,7 +110,11 @@ void BPF_STRUCT_OPS(simple_dispatch, s32 cpu, struct task_struct *prev)
 	if (check_process_status(&pid) != DEFAULT){
 		bpf_printk("dispatch");
 	}
-	scx_bpf_dsq_move_to_local(SHARED_DSQ);
+	if (check_process_status(&pid) != STOP){
+		scx_bpf_dsq_move_to_local(SHARED_DSQ);
+	}else{
+		scx_bpf_dsq_move_to_local(4);
+	}
 }
 
 void BPF_STRUCT_OPS(simple_running, struct task_struct *p)
@@ -168,6 +172,10 @@ void BPF_STRUCT_OPS(simple_enable, struct task_struct *p)
 s32 BPF_STRUCT_OPS_SLEEPABLE(simple_init)
 {
 	bpf_printk("init");
+	scx_bpf_create_dsq(4, -1);
+	scx_bpf_create_dsq(5, 1);
+	scx_bpf_create_dsq(6, 2);
+	scx_bpf_create_dsq(7, 3);
 	return scx_bpf_create_dsq(SHARED_DSQ, -1);
 }
 
