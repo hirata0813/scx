@@ -12,7 +12,7 @@ int main() {
     //printf("In program: pid=%d\n", (int)pid);
 
     for(i=0; i<100000000; i++){
-	//printf("i:%d\n", i);
+	printf("i:%d\n", i);
 	//sleep(1);
     }
 

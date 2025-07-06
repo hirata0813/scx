@@ -52,26 +52,31 @@ s32 BPF_STRUCT_OPS(simple_select_cpu, struct task_struct *p, s32 prev_cpu, u64 w
 	bool is_idle = false;
 	s32 cpu; //s32 は，signed 32-bit integer
 	__u32 pid = get_pid();
+	struct cgroup *cgrp = __COMPAT_scx_bpf_task_cgroup(p); // scx_bpf_task_cgroup が使えるか確認した後，その関数を実行
 
-	bpf_printk("process state: %d", p->__state);
+
+	//bpf_printk("process state: %d", p->__state);
 	cpu = scx_bpf_select_cpu_dfl(p, prev_cpu, wake_flags, &is_idle); // 左の関数は，ops.select_cpu()のデフォルト実装
 	// 選択されたCPUがアイドル状態なら，id_idleにtrueが書き込まれる
+	//bpf_printk("pid: %d, cgroup pointer: %p, cgroup id from scx: %d, cgroup id: %d, cgroup name from scx: %s, cgroup name: %s", pid, cgrp, cgrp->kn->id, p->cgroups->subsys[0]->cgroup->kn->id, cgrp->kn->name, p->cgroups->subsys[0]->cgroup->kn->name);
 	
 	if (is_idle) {
 
 		if (check_process_status(&pid) == DEFAULT){
 			//bpf_printk("RUN! PID: %d", pid);
 			scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL, SCX_SLICE_DFL, 0); // 選択されたCPUのローカルDSQにタスクを挿入
+			//bpf_printk("pid: %d, cgroup pointer: %p, cgroup id from scx: %d, cgroup id: %d, cgroup name from scx: %s, cgroup name: %s", pid, cgrp, cgrp->kn->id, p->cgroups->subsys[0]->cgroup->kn->id, cgrp->kn->name, p->cgroups->subsys[0]->cgroup->kn->name);
 		}else{
-			bpf_printk("select_cpu:IDLE");
-			scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL, 1000000, 0); // 1ms間のスライスを与える
-			//scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL, SCX_SLICE_DFL, 0); // IDが4のローカルDSQにタスクを挿入
+			bpf_printk("pid: %d, cgroup pointer: %p, cgroup id from scx: %d, cgroup id: %d, cgroup name from scx: %s, cgroup name: %s", pid, cgrp, cgrp->kn->id, p->cgroups->subsys[0]->cgroup->kn->id, cgrp->kn->name, p->cgroups->subsys[0]->cgroup->kn->name);
+			//scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL, 1000000, 0); // 1ms間のスライスを与える
+			scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL, SCX_SLICE_DFL, 0); // IDが4のローカルDSQにタスクを挿入
 		}
 	}else{
 		if (check_process_status(&pid) != DEFAULT){
-			bpf_printk("select_cpu:NOT-IDLE");
+			bpf_printk("pid: %d, cgroup pointer: %p, cgroup id from scx: %d, cgroup id: %d, cgroup name from scx: %s, cgroup name: %s", pid, cgrp, cgrp->kn->id, p->cgroups->subsys[0]->cgroup->kn->id, cgrp->kn->name, p->cgroups->subsys[0]->cgroup->kn->name);
 		}
 	}
+	bpf_cgroup_release(cgrp);
 
 	return cpu;
 }
