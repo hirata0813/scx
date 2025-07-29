@@ -5,4 +5,4 @@ install_subdir(join_paths(meson.current_source_dir(), 'include/scx'), install_di
 
 subdir('c')
 
-subdir('rust')
+#subdir('rust')

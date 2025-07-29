@@ -31,18 +31,18 @@ fi
 if [ $# -ge 2 ] ; then
     SCHEDS[$2]="-v"
 else
-    SCHEDS["scx_ctrl"]="-v"
-    SCHEDS["scx_simple"]="-v"
-    SCHEDS["myscx_simple"]="-v"
-    SCHEDS["scx_central"]="-v"
-    SCHEDS["scx_nest"]="-v"
-    SCHEDS["scx_flatcg"]="-v"
-    SCHEDS["scx_pair"]="-v"
-    SCHEDS["scx_rusty"]="-v"
-    SCHEDS["scx_p2dq"]="-v"
-    SCHEDS["scx_rustland"]="-v"
-    SCHEDS["scx_bpfland"]="-v"
-    SCHEDS["scx_layered"]="-v --run-example"
+    #SCHEDS["scx_ctrl"]="-v"
+    #SCHEDS["scx_simple"]="-v"
+    #SCHEDS["myscx_simple"]="-v"
+    #SCHEDS["scx_central"]="-v"
+    #SCHEDS["scx_nest"]="-v"
+    #SCHEDS["scx_flatcg"]="-v"
+    #SCHEDS["scx_pair"]="-v"
+    #SCHEDS["scx_rusty"]="-v"
+    #SCHEDS["scx_p2dq"]="-v"
+    #SCHEDS["scx_rustland"]="-v"
+    #SCHEDS["scx_bpfland"]="-v"
+    #SCHEDS["scx_layered"]="-v --run-example"
 fi
 
 if [[ -v SCHEDS["scx_layered"] ]] ; then
