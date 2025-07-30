@@ -66,54 +66,54 @@ int main(int argc, char **argv)
 
 	skel->rodata->slice_ns = __COMPAT_ENUM_OR_ZERO("scx_public_consts", "SCX_SLICE_DFL");
 
-	while ((opt = getopt(argc, argv, "s:e:t:T:l:b:PHd:D:Spvh")) != -1) {
-		switch (opt) {
-		case 's':
-			skel->rodata->slice_ns = strtoull(optarg, NULL, 0) * 1000;
-			break;
-		case 'e':
-			skel->bss->test_error_cnt = strtoul(optarg, NULL, 0);
-			break;
-		case 't':
-			skel->rodata->stall_user_nth = strtoul(optarg, NULL, 0);
-			break;
-		case 'T':
-			skel->rodata->stall_kernel_nth = strtoul(optarg, NULL, 0);
-			break;
-		case 'l':
-			skel->rodata->dsp_inf_loop_after = strtoul(optarg, NULL, 0);
-			break;
-		case 'b':
-			skel->rodata->dsp_batch = strtoul(optarg, NULL, 0);
-			break;
-		case 'P':
-			skel->rodata->print_shared_dsq = true;
-			break;
-		case 'H':
-			skel->rodata->highpri_boosting = true;
-			break;
-		case 'd':
-			skel->rodata->disallow_tgid = strtol(optarg, NULL, 0);
-			if (skel->rodata->disallow_tgid < 0)
-				skel->rodata->disallow_tgid = getpid();
-			break;
-		case 'D':
-			skel->struct_ops.priority_ops->exit_dump_len = strtoul(optarg, NULL, 0);
-			break;
-		case 'S':
-			skel->rodata->suppress_dump = true;
-			break;
-		case 'p':
-			skel->struct_ops.priority_ops->flags |= SCX_OPS_SWITCH_PARTIAL;
-			break;
-		case 'v':
-			verbose = true;
-			break;
-		default:
-			fprintf(stderr, help_fmt, basename(argv[0]));
-			return opt != 'h';
-		}
-	}
+	//while ((opt = getopt(argc, argv, "s:e:t:T:l:b:PHd:D:Spvh")) != -1) {
+	//	switch (opt) {
+	//	case 's':
+	//		skel->rodata->slice_ns = strtoull(optarg, NULL, 0) * 1000;
+	//		break;
+	//	case 'e':
+	//		skel->bss->test_error_cnt = strtoul(optarg, NULL, 0);
+	//		break;
+	//	case 't':
+	//		skel->rodata->stall_user_nth = strtoul(optarg, NULL, 0);
+	//		break;
+	//	case 'T':
+	//		skel->rodata->stall_kernel_nth = strtoul(optarg, NULL, 0);
+	//		break;
+	//	case 'l':
+	//		skel->rodata->dsp_inf_loop_after = strtoul(optarg, NULL, 0);
+	//		break;
+	//	case 'b':
+	//		skel->rodata->dsp_batch = strtoul(optarg, NULL, 0);
+	//		break;
+	//	case 'P':
+	//		skel->rodata->print_shared_dsq = true;
+	//		break;
+	//	case 'H':
+	//		skel->rodata->highpri_boosting = true;
+	//		break;
+	//	case 'd':
+	//		skel->rodata->disallow_tgid = strtol(optarg, NULL, 0);
+	//		if (skel->rodata->disallow_tgid < 0)
+	//			skel->rodata->disallow_tgid = getpid();
+	//		break;
+	//	case 'D':
+	//		skel->struct_ops.priority_ops->exit_dump_len = strtoul(optarg, NULL, 0);
+	//		break;
+	//	case 'S':
+	//		skel->rodata->suppress_dump = true;
+	//		break;
+	//	case 'p':
+	//		skel->struct_ops.priority_ops->flags |= SCX_OPS_SWITCH_PARTIAL;
+	//		break;
+	//	case 'v':
+	//		verbose = true;
+	//		break;
+	//	default:
+	//		fprintf(stderr, help_fmt, basename(argv[0]));
+	//		return opt != 'h';
+	//	}
+	//}
 
 	SCX_OPS_LOAD(skel, priority_ops, scx_priority, uei);
 	link = SCX_OPS_ATTACH(skel, priority_ops, scx_priority);
@@ -122,7 +122,7 @@ int main(int argc, char **argv)
 
 		printf("stats  : local_sum=%ld nr_custom=%ld nr_dispatch=%ld\n",
 		       skel->bss->nr_priority_local_sum, skel->bss->nr_nonpriority_custom,
-		       skel->bss->nr_dispatched_global_sum);,
+		       skel->bss->nr_dispatched_global_sum);
 		fflush(stdout);
 		sleep(1);
 	}
