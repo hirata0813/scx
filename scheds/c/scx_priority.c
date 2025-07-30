@@ -119,27 +119,10 @@ int main(int argc, char **argv)
 	link = SCX_OPS_ATTACH(skel, priority_ops, scx_priority);
 
 	while (!exit_req && !UEI_EXITED(skel, uei)) {
-		long nr_enqueued = skel->bss->nr_enqueued;
-		long nr_dispatched = skel->bss->nr_dispatched;
 
-		printf("stats  : enq=%lu dsp=%lu delta=%ld reenq=%"PRIu64" deq=%"PRIu64" core=%"PRIu64" enq_ddsp=%"PRIu64"\n",
-		       nr_enqueued, nr_dispatched, nr_enqueued - nr_dispatched,
-		       skel->bss->nr_reenqueued, skel->bss->nr_dequeued,
-		       skel->bss->nr_core_sched_execed,
-		       skel->bss->nr_ddsp_from_enq);
-		printf("         exp_local=%"PRIu64" exp_remote=%"PRIu64" exp_timer=%"PRIu64" exp_lost=%"PRIu64"\n",
-		       skel->bss->nr_expedited_local,
-		       skel->bss->nr_expedited_remote,
-		       skel->bss->nr_expedited_from_timer,
-		       skel->bss->nr_expedited_lost);
-		if (__COMPAT_has_ksym("scx_bpf_cpuperf_cur"))
-			printf("cpuperf: cur min/avg/max=%u/%u/%u target min/avg/max=%u/%u/%u\n",
-			       skel->bss->cpuperf_min,
-			       skel->bss->cpuperf_avg,
-			       skel->bss->cpuperf_max,
-			       skel->bss->cpuperf_target_min,
-			       skel->bss->cpuperf_target_avg,
-			       skel->bss->cpuperf_target_max);
+		printf("stats  : local_sum=%ld nr_custom=%ld nr_dispatch=%ld\n",
+		       skel->bss->nr_priority_local_sum, skel->bss->nr_nonpriority_custom,
+		       skel->bss->nr_dispatched_global_sum);,
 		fflush(stdout);
 		sleep(1);
 	}
