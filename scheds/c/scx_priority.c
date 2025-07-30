@@ -12,7 +12,7 @@
 #include <libgen.h>
 #include <bpf/bpf.h>
 #include <scx/common.h>
-#include "scx_lockconf.bpf.skel.h"
+#include "scx_priority.bpf.skel.h"
 
 const char help_fmt[] =
 "A simple five-level FIFO queue sched_ext scheduler.\n"
@@ -32,7 +32,7 @@ const char help_fmt[] =
 "  -H            Boost nice -20 tasks in SHARED_DSQ, use with -b\n"
 "  -d PID        Disallow a process from switching into SCHED_EXT (-1 for self)\n"
 "  -D LEN        Set scx_exit_info.dump buffer length\n"
-"  -S            Suppress lockconf-specific debug dump\n"
+"  -S            Suppress priority-specific debug dump\n"
 "  -p            Switch only tasks on SCHED_EXT policy instead of all\n"
 "  -v            Print libbpf debug messages\n"
 "  -h            Display this help and exit\n";
@@ -54,7 +54,7 @@ static void sigint_handler(int dummy)
 
 int main(int argc, char **argv)
 {
-	struct scx_lockconf *skel;
+	struct scx_priority *skel;
 	struct bpf_link *link;
 	int opt;
 
@@ -62,7 +62,7 @@ int main(int argc, char **argv)
 	signal(SIGINT, sigint_handler);
 	signal(SIGTERM, sigint_handler);
 
-	skel = SCX_OPS_OPEN(lockconf_ops, scx_qmap);
+	skel = SCX_OPS_OPEN(priority_ops, scx_priority);
 
 	skel->rodata->slice_ns = __COMPAT_ENUM_OR_ZERO("scx_public_consts", "SCX_SLICE_DFL");
 
@@ -98,13 +98,13 @@ int main(int argc, char **argv)
 				skel->rodata->disallow_tgid = getpid();
 			break;
 		case 'D':
-			skel->struct_ops.lockconf_ops->exit_dump_len = strtoul(optarg, NULL, 0);
+			skel->struct_ops.priority_ops->exit_dump_len = strtoul(optarg, NULL, 0);
 			break;
 		case 'S':
 			skel->rodata->suppress_dump = true;
 			break;
 		case 'p':
-			skel->struct_ops.lockconf_ops->flags |= SCX_OPS_SWITCH_PARTIAL;
+			skel->struct_ops.priority_ops->flags |= SCX_OPS_SWITCH_PARTIAL;
 			break;
 		case 'v':
 			verbose = true;
@@ -115,8 +115,8 @@ int main(int argc, char **argv)
 		}
 	}
 
-	SCX_OPS_LOAD(skel, lockconf_ops, scx_qmap, uei);
-	link = SCX_OPS_ATTACH(skel, lockconf_ops, scx_qmap);
+	SCX_OPS_LOAD(skel, priority_ops, scx_priority, uei);
+	link = SCX_OPS_ATTACH(skel, priority_ops, scx_priority);
 
 	while (!exit_req && !UEI_EXITED(skel, uei)) {
 		long nr_enqueued = skel->bss->nr_enqueued;
@@ -146,9 +146,9 @@ int main(int argc, char **argv)
 
 	bpf_link__destroy(link);
 	UEI_REPORT(skel, uei);
-	scx_lockconf__destroy(skel);
+	scx_priority__destroy(skel);
 	/*
-	 * scx_lockconf implements ops.cpu_on/offline() and doesn't need to restart
+	 * scx_priority implements ops.cpu_on/offline() and doesn't need to restart
 	 * on CPU hotplug events.
 	 */
 	return 0;
