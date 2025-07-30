@@ -115,13 +115,13 @@ void BPF_STRUCT_OPS(priority_enqueue, struct task_struct *p, u64 enq_flags)
     }
     
     /* Non-priority tasks go to custom DSQ */
-    if (scx_bpf_dispatch(p, NONPRI_DSQ, slice_ns, enq_flags)) {
+    if (scx_bpf_dsq_insert(p, NONPRI_DSQ, slice_ns, enq_flags)) {
         __sync_fetch_and_add(&nr_nonpriority_custom, 1);
         return;
     }
     
     /* Fallback to global DSQ */
-    scx_bpf_dispatch(p, SHARED_DSQ, slice_ns, enq_flags);
+    scx_bpf_dsq_insert(p, SHARED_DSQ, slice_ns, enq_flags);
 }
 
 void BPF_STRUCT_OPS(priority_dispatch, s32 cpu, struct task_struct *prev)
