@@ -53,8 +53,13 @@ static bool is_priority_task(struct task_struct *p)
     /* Check if TID is in priority list */
     val2 = bpf_map_lookup_elem(&priority_tids, &pid);
 
+    if((val1 != NULL && *val1 == 1) && (val2 != NULL && *val2 == 1)){
+		bpf_printk("is priority task\n");
+		return true;
+    }else{
+		return false;
+    }
 
-    return (val1 != NULL && *val1 == 1) && (val2 != NULL && *val2 == 1);
 }
 
 s32 BPF_STRUCT_OPS(priority_select_cpu, struct task_struct *p, s32 prev_cpu, u64 wake_flags)
@@ -62,7 +67,6 @@ s32 BPF_STRUCT_OPS(priority_select_cpu, struct task_struct *p, s32 prev_cpu, u64
     s32 cpu;
     u64 dummy;
     
-    bpf_printk("select_cpu");
     if (is_priority_task(p)) {
         /* For priority tasks, try to find idle CPU or use prev_cpu */
         cpu = scx_bpf_pick_idle_cpu(p->cpus_ptr, 0);
@@ -70,12 +74,12 @@ s32 BPF_STRUCT_OPS(priority_select_cpu, struct task_struct *p, s32 prev_cpu, u64
         if (cpu >= 0) {
             /* If we found an idle CPU, enqueue directly to local DSQ */
             __sync_fetch_and_add(&nr_priority_local_sum, 1);
-		    scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | cpu, slice_ns, 0);
+		    scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | cpu, SCX_SLICE_DFL * PRIORITY_SLICE_MULTIPLIER, SCX_ENQ_HEAD);
             return cpu;
 
         } else{
             __sync_fetch_and_add(&nr_priority_local_sum, 1);
-		    scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | prev_cpu, slice_ns, 0);
+		    scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | prev_cpu, SCX_SLICE_DFL * PRIORITY_SLICE_MULTIPLIER, SCX_ENQ_HEAD);
             return prev_cpu;
         }
     }
@@ -108,13 +112,12 @@ void BPF_STRUCT_OPS(priority_enqueue, struct task_struct *p, u64 enq_flags)
         /* Fallback: enqueue to local DSQ if somehow reached here */
         cpu = pick_direct_dispatch_cpu(p, scx_bpf_task_cpu(p));
         if (cpu >= 0) {
-		    scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | cpu, slice_ns, 0);
+		    scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | cpu, slice_ns , SCX_ENQ_HEAD);
             __sync_fetch_and_add(&nr_priority_local_sum, 1);
             return;
         }
     }
     /* Non-priority tasks go to NONPRI_DSQ */
-    bpf_printk("enqueue");
     scx_bpf_dsq_insert(p, NONPRI_DSQ, slice_ns, 0);
     __sync_fetch_and_add(&nr_nonpriority_custom, 1);
 }
@@ -122,10 +125,9 @@ void BPF_STRUCT_OPS(priority_enqueue, struct task_struct *p, u64 enq_flags)
 void BPF_STRUCT_OPS(priority_dispatch, s32 cpu, struct task_struct *prev)
 {
     struct task_struct *p;
-    bpf_printk("dispatch");
     /* scan NONPRI_DSQ and move a task to SHARED_DSQ */
     bpf_for_each(scx_dsq, p, NONPRI_DSQ, 0) {
-	__COMPAT_scx_bpf_dsq_move_vtime(BPF_FOR_EACH_ITER, p, SHARED_DSQ, 0);
+	__COMPAT_scx_bpf_dsq_move(BPF_FOR_EACH_ITER, p, SHARED_DSQ, 0);
         __sync_fetch_and_sub(&nr_nonpriority_custom, 1);
         __sync_fetch_and_add(&nr_dispatched_global_sum, 1);
         break;

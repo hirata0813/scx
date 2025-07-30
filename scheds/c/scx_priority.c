@@ -61,6 +61,14 @@ int main(int argc, char **argv)
 	libbpf_set_print(libbpf_print_fn);
 	signal(SIGINT, sigint_handler);
 	signal(SIGTERM, sigint_handler);
+	unlink("/sys/fs/bpf/priority_pids"); // エラー無視でOK
+	unlink("/sys/fs/bpf/priority_tids"); // エラー無視でOK
+	unlink("/sys/fs/bpf/_data_uei_dump"); // エラー無視でOK
+	unlink("/sys/fs/bpf/priority_ops"); // エラー無視でOK
+	unlink("/sys/fs/bpf/scx_prio_bss"); // エラー無視でOK
+	unlink("/sys/fs/bpf/scx_prio_data"); // エラー無視でOK
+	unlink("/sys/fs/bpf/scx_prio_rodata"); // エラー無視でOK
+
 
 	skel = SCX_OPS_OPEN(priority_ops, scx_priority);
 
@@ -116,6 +124,10 @@ int main(int argc, char **argv)
 	//}
 
 	SCX_OPS_LOAD(skel, priority_ops, scx_priority, uei);
+
+	//bpf_map__set_pin_path(skel->maps.priority_pids, "/sys/fs/bpf/priority_pids");
+	bpf_object__pin_maps(skel->obj, "/sys/fs/bpf"); // 一括ピン止めも可能
+	printf("hello");
 	link = SCX_OPS_ATTACH(skel, priority_ops, scx_priority);
 
 	while (!exit_req && !UEI_EXITED(skel, uei)) {
