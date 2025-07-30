@@ -64,19 +64,20 @@ s32 BPF_STRUCT_OPS(priority_select_cpu, struct task_struct *p, s32 prev_cpu, u64
 {
     s32 cpu;
     
-    if (is_priority_task(p)) {
+    // if (is_priority_task(p)) {
+    if (false) {
         /* For priority tasks, try to find idle CPU or use prev_cpu */
         cpu = scx_bpf_pick_idle_cpu(p->cpus_ptr, 0);
 
         if (cpu >= 0) {
             /* If we found an idle CPU, enqueue directly to local DSQ */
             __sync_fetch_and_add(&nr_priority_local, 1);
-		    scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | cpu, slice_ns * PRIORITY_SLICE_MULTIPLIER, enq_flags);
+		    scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | cpu, slice_ns, enq_flags);
             return cpu;
 
         } else{
             __sync_fetch_and_add(&nr_priority_local, 1);
-		    scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | prev_cpu, slice_ns * PRIORITY_SLICE_MULTIPLIER, enq_flags);
+		    scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | prev_cpu, slice_ns, enq_flags);
             return prev_cpu;
         }
     }
@@ -105,11 +106,12 @@ void BPF_STRUCT_OPS(priority_enqueue, struct task_struct *p, u64 enq_flags)
 {
     s32 cpu;
     /* Priority tasks should not reach enqueue as they are handled in select_cpu */
-    if (is_priority_task(p)) {
+    //if (is_priority_task(p)) {
+    if (false) {
         /* Fallback: enqueue to local DSQ if somehow reached here */
         cpu = pick_direct_dispatch_cpu(p, scx_bpf_task_cpu(p));
         if (cpu >= 0) {
-		    scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | cpu, slice_ns * PRIORITY_SLICE_MULTIPLIER, enq_flags);
+		    scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | cpu, slice_ns, enq_flags);
             return;
         }
     }
@@ -126,14 +128,15 @@ void BPF_STRUCT_OPS(priority_enqueue, struct task_struct *p, u64 enq_flags)
 
 void BPF_STRUCT_OPS(priority_dispatch, s32 cpu, struct task_struct *prev)
 {
-    /* Move tasks from non-priority DSQ to global DSQ */
-    if (scx_bpf_consume(NONPRI_DSQ)) {
+	/* scan NONPRI_DSQ and move a task to SHARED_DSQ */
+	bpf_for_each(scx_dsq, p, NONPRI_DSQ, 0) {
+		__COMPAT_scx_bpf_dsq_move_vtime(BPF_FOR_EACH_ITER, p, SHARED_DSQ, 0);
         __sync_fetch_and_add(&nr_dispatched_global, 1);
         return;
-    }
+	}
     
     /* Consume from global DSQ */
-    scx_bpf_consume(SHARED_DSQ);
+    //scx_bpf_dsq_move_to_local(SHARED_DSQ);
 }
 
 s32 BPF_STRUCT_OPS(priority_init)
