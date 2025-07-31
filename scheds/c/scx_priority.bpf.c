@@ -100,7 +100,7 @@ static s32 pick_direct_dispatch_cpu(struct task_struct *p, s32 prev_cpu)
 	if (cpu >= 0)
 		return cpu;
 
-	return -1;
+	return prev_cpu;
 }
 
 
@@ -110,12 +110,10 @@ void BPF_STRUCT_OPS(priority_enqueue, struct task_struct *p, u64 enq_flags)
     /* Priority tasks should not reach enqueue as they are handled in select_cpu */
     if (is_priority_task(p)) {
         /* Fallback: enqueue to local DSQ if somehow reached here */
-        cpu = pick_direct_dispatch_cpu(p, scx_bpf_task_cpu(p));
-        if (cpu >= 0) {
-		    scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | cpu, slice_ns , SCX_ENQ_HEAD);
-            __sync_fetch_and_add(&nr_priority_local_sum, 1);
-            return;
-        }
+	    cpu = pick_direct_dispatch_cpu(p, scx_bpf_task_cpu(p));
+	    scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | cpu, SCX_SLICE_DFL * PRIORITY_SLICE_MULTIPLIER, SCX_ENQ_HEAD);
+        __sync_fetch_and_add(&nr_priority_local_sum, 1);
+        return;
     }
     /* Non-priority tasks go to NONPRI_DSQ */
     scx_bpf_dsq_insert(p, NONPRI_DSQ, slice_ns, 0);
