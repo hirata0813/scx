@@ -9,7 +9,7 @@ enum consts {
     ONE_SEC_IN_NS		= 1000000000,
     SHARED_DSQ		= 0,
     NONPRI_DSQ		= 1,
-    PRIORITY_SLICE_MULTIPLIER = 2,
+    PRIORITY_SLICE_MULTIPLIER = 10,
 };
 
 char _license[] SEC("license") = "GPL";
