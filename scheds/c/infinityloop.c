@@ -4,7 +4,7 @@
 int main(int argc, char *argv[]) {
     volatile int sum = 0;
 
-    for (int i=0; 0 == 0; i++){
+    for (volatile int i=0; 0 == 0; i++){
             sum++;
     }
     return 0;
