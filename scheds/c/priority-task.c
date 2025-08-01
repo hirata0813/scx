@@ -54,7 +54,7 @@ int main(int argc, char *argv[]) {
     elapsed = (end.tv_sec - start.tv_sec) +
                      (end.tv_nsec - start.tv_nsec) / 1e9;
 
-    printf("Elapsed time: %.6f seconds\n", elapsed);
+    printf("This is priority task. Elapsed time: %.6f seconds\n", elapsed);
 
     return 0;
 }

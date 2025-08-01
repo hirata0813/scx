@@ -9,7 +9,7 @@ enum consts {
     ONE_SEC_IN_NS		= 1000000000,
     SHARED_DSQ		= 0,
     NONPRI_DSQ		= 1,
-    PRIORITY_SLICE_MULTIPLIER = 10,
+    PRIORITY_SLICE_MULTIPLIER = 40,
 };
 
 char _license[] SEC("license") = "GPL";
@@ -53,20 +53,14 @@ static bool is_priority_task(struct task_struct *p)
     /* Check if TID is in priority list */
     val2 = bpf_map_lookup_elem(&priority_tids, &pid);
 
-    if((val1 != NULL && *val1 == 1) && (val2 != NULL && *val2 == 1)){
-		bpf_printk("is priority task\n");
-		return true;
-    }else{
-		return false;
-    }
-
+    return (val1 != NULL && *val1 == 1) && (val2 != NULL && *val2 == 1);
 }
 
 s32 BPF_STRUCT_OPS(priority_select_cpu, struct task_struct *p, s32 prev_cpu, u64 wake_flags)
 {
     s32 cpu;
     u64 dummy;
-    
+
     if (is_priority_task(p)) {
         /* For priority tasks, try to find idle CPU or use prev_cpu */
         cpu = scx_bpf_pick_idle_cpu(p->cpus_ptr, 0);
@@ -83,7 +77,7 @@ s32 BPF_STRUCT_OPS(priority_select_cpu, struct task_struct *p, s32 prev_cpu, u64
             return prev_cpu;
         }
     }
-    
+
     /* For non-priority tasks, just return appropriate CPU */
     return scx_bpf_select_cpu_dfl(p, prev_cpu, wake_flags, &dummy);
 }
@@ -116,7 +110,7 @@ void BPF_STRUCT_OPS(priority_enqueue, struct task_struct *p, u64 enq_flags)
         return;
     }
     /* Non-priority tasks go to NONPRI_DSQ */
-    scx_bpf_dsq_insert(p, NONPRI_DSQ, slice_ns, 0);
+    scx_bpf_dsq_insert(p, NONPRI_DSQ, SCX_SLICE_DFL, 0);
     __sync_fetch_and_add(&nr_nonpriority_custom, 1);
 }
 
