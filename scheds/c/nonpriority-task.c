@@ -70,7 +70,7 @@ int main(int argc, char *argv[]) {
     elapsed = (end.tv_sec - start.tv_sec) +
                      (end.tv_nsec - start.tv_nsec) / 1e9;
 
-    fprintf(fp, "%d,%d,%.6f", num_nonprio, iteration, elapsed);
+    fprintf(fp, "%d,%d,%.6f\n", num_nonprio, iteration, elapsed);
     // ロック解除
     flock(fd, LOCK_UN);
     fclose(fp);

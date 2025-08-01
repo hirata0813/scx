@@ -58,7 +58,7 @@ int main(int argc, char *argv[]) {
                      (end.tv_nsec - start.tv_nsec) / 1e9;
 
     // 結果の出力(nonpriority_count,iteration,priority_time,avg_nonpriority_time)
-    fprintf(fp, "%d,%d,%.6f", num_nonprio, iteration, elapsed);
+    fprintf(fp, "%d,%d,%.6f\n", num_nonprio, iteration, elapsed);
 
     fclose(fp);
     return 0;

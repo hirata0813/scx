@@ -9,19 +9,8 @@ NONPRIORITY_TASK="./nonpriority-task"
 ITERATIONS=10
 MAX_NONPRIORITY_TASKS=10
 
-# priority schedulerの存在チェック
 PRIORITY_SCHED="scx_priority"
-if [ ! -x "$PRIORITY_SCHED" ]; then
-  echo "Error: $PRIORITY_SCHED not found or not executable"
-  exit 1
-fi
 
-# 結果保存ディレクトリ
-RESULTS_DIR="benchmark_results"
-mkdir -p "$RESULTS_DIR"
-
-# CSVヘッダー
-echo "nonpriority_count,iteration,priority_time,avg_nonpriority_time" > "$RESULTS_DIR/results.csv"
 
 # scx_priorityが動いているか確認
 check_scheduler() {
@@ -32,22 +21,9 @@ check_scheduler() {
       # スケジューラが起動するまで待つ
       sleep 2
   
-      # スケジューラが正常に起動したかチェック
-      if ! kill -0 "$sched_pid" 2>/dev/null; then
-        echo "Error: Failed to start priority scheduler"
-        exit 1
-      fi  
     fi
 
     echo "scx_priority is running. Proceeding with benchmark..."
-}
-
-# プロセス終了を待つ関数
-wait_for_completion() {
-    local pids=("$@")
-    for pid in "${pids[@]}"; do
-        wait "$pid" 2>/dev/null
-    done
 }
 
 # メイン測定ループ
@@ -57,10 +33,7 @@ run_benchmark() {
     
     echo "Running iteration $iteration with $nonpriority_count non-priority tasks..."
     
-    # 時間計測用配列
-    declare -a nonpriority_times
     declare -a pids
-    
     
     # non-priority tasks開始
     for ((i=1; i<=nonpriority_count; i++)); do
@@ -87,7 +60,7 @@ run_benchmark() {
     echo "All tasks completed for iteration $iteration with $nonpriority_count non-priority tasks"
     
     # クリーンアップ
-    sleep 1
+    sleep 10
 }
 
 # メイン実行
@@ -105,7 +78,7 @@ main() {
         
         for ((iteration=1; iteration<=ITERATIONS; iteration++)); do
             run_benchmark $nonpriority_count $iteration
-            sleep 2  # 測定間隔
+            sleep 10  # 測定間隔
         done
     done
 }
