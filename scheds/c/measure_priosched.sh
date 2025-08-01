@@ -134,7 +134,7 @@ main() {
         for dispatch_limit in "${dispatch_limits[@]}"; do
             echo ""
             echo "--- Testing with dispatch limit: ${dispatch_limit} ---"
-            check_scheduler 
+            check_scheduler $slice_mult $dispatch_limit
     
             # infinity_loop の数を変えながら(0,1,16,80)について測定
             for infinity_count in "${infinity_counts[@]}"; do

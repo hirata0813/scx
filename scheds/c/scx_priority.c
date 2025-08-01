@@ -130,15 +130,14 @@ int main(int argc, char **argv)
 
 	//bpf_map__set_pin_path(skel->maps.priority_pids, "/sys/fs/bpf/priority_pids");
 	bpf_object__pin_maps(skel->obj, "/sys/fs/bpf"); // 一括ピン止めも可能
-	printf("hello");
 	link = SCX_OPS_ATTACH(skel, priority_ops, scx_priority);
 
 	while (!exit_req && !UEI_EXITED(skel, uei)) {
 
-		printf("stats  : local_sum=%ld nr_custom=%ld nr_dispatch=%ld\n",
-		       skel->bss->nr_priority_local_sum, skel->bss->nr_nonpriority_custom,
-		       skel->bss->nr_dispatched_global_sum);
-		fflush(stdout);
+		//printf("stats  : local_sum=%ld nr_custom=%ld nr_dispatch=%ld\n",
+		//       skel->bss->nr_priority_local_sum, skel->bss->nr_nonpriority_custom,
+		//       skel->bss->nr_dispatched_global_sum);
+		//fflush(stdout);
 		sleep(1);
 	}
 
