@@ -10,6 +10,7 @@
 #include <time.h>
 #include <sys/types.h>
 #include <sys/syscall.h>
+#include <sys/file.h>
 
 #include <signal.h> // シグナルを処理するためのマクロ定義
 #include <libgen.h> //ファイルパス解析用
@@ -22,6 +23,22 @@ int main(int argc, char *argv[]) {
     volatile int sum = 0;
     struct timespec start, end;
     double elapsed;
+    int num_nonprio = atoi(argv[1]); // 第一引数で非優先度タスクの数
+    int iteration = atoi(argv[2]); // 第二引数でイテレーション数
+    FILE *fp = fopen("nonpriority-task-result.csv","a");;
+
+    if (!fp) {
+        perror("fopen");
+        return 1;
+    }
+
+    int fd = fileno(fp);
+
+    if (flock(fd, LOCK_EX) != 0) {
+        perror("flock (LOCK_EX)");
+        fclose(fp);
+        return 1;
+    }
 
     int pid = getpid();
     int tid = syscall(SYS_gettid);
@@ -53,7 +70,10 @@ int main(int argc, char *argv[]) {
     elapsed = (end.tv_sec - start.tv_sec) +
                      (end.tv_nsec - start.tv_nsec) / 1e9;
 
-    printf("This is non-priority task. Elapsed time: %.6f seconds\n", elapsed);
+    fprintf(fp, "%d,%d,%.6f", num_nonprio, iteration, elapsed);
+    // ロック解除
+    flock(fd, LOCK_UN);
+    fclose(fp);
 
     return 0;
 }

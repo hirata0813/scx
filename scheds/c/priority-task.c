@@ -22,6 +22,9 @@ int main(int argc, char *argv[]) {
     volatile int sum = 0;
     struct timespec start, end;
     double elapsed;
+    int num_nonprio = atoi(argv[1]); // 第一引数で非優先度タスクの数
+    int iteration = atoi(argv[2]); // 第二引数でイテレーション数
+    FILE *fp = fopen("priority-task-result.csv","a");;
 
     int pid = getpid();
     int tid = syscall(SYS_gettid);
@@ -54,7 +57,9 @@ int main(int argc, char *argv[]) {
     elapsed = (end.tv_sec - start.tv_sec) +
                      (end.tv_nsec - start.tv_nsec) / 1e9;
 
-    printf("This is priority task. Elapsed time: %.6f seconds\n", elapsed);
+    // 結果の出力(nonpriority_count,iteration,priority_time,avg_nonpriority_time)
+    fprintf(fp, "%d,%d,%.6f", num_nonprio, iteration, elapsed);
 
+    fclose(fp);
     return 0;
 }
