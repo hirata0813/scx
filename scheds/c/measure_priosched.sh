@@ -143,12 +143,12 @@ main() {
                 echo "Testing with ${infinity_count} infinity loops"
 
                 # 各nonpriority task数(1~10)について測定
-		for (nonpriority_count=1; nonpriority_count<=MAX_NONPRIORITY_TASKS; nonpriority_count++); do
+		for ((nonpriority_count=1; nonpriority_count<=MAX_NONPRIORITY_TASKS; nonpriority_count++)); do
                     echo ""
                     echo "=== Testing with $nonpriority_count non-priority tasks ==="
 
                     # 各イテレーション(1~10)について測定
-                    for (iteration=1; iteration<=ITERATIONS; iteration++); do
+		    for ((iteration=1; iteration<=ITERATIONS; iteration++)); do
                         run_benchmark $slice_mult $dispatch_limit $infinity_count $nonpriority_count $iteration
                         sleep 10  # 測定間隔
                     done
