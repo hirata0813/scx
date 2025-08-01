@@ -57,6 +57,8 @@ int main(int argc, char **argv)
 	struct scx_priority *skel;
 	struct bpf_link *link;
 	int opt;
+    int ts_multi = atoi(argv[1]); // 第一引数でタイムスライスに掛ける値
+    int max_dispatch = atoi(argv[2]); // 第ニ引数でディスパッチする非優先タスクの最大数
 
 	libbpf_set_print(libbpf_print_fn);
 	signal(SIGINT, sigint_handler);
@@ -72,7 +74,8 @@ int main(int argc, char **argv)
 
 	skel = SCX_OPS_OPEN(priority_ops, scx_priority);
 
-	skel->rodata->slice_ns = __COMPAT_ENUM_OR_ZERO("scx_public_consts", "SCX_SLICE_DFL");
+	skel->rodata->priority_slice_multiplier = ts_multi; // タイムスライスに掛ける値を設定
+	skel->rodata->max_dispatch = max_dispatch; // タイムスライスに掛ける値を設定
 
 	//while ((opt = getopt(argc, argv, "s:e:t:T:l:b:PHd:D:Spvh")) != -1) {
 	//	switch (opt) {

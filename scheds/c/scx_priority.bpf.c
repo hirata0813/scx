@@ -9,13 +9,13 @@ enum consts {
     ONE_SEC_IN_NS		= 1000000000,
     SHARED_DSQ		= 0,
     NONPRI_DSQ		= 1,
-    PRIORITY_SLICE_MULTIPLIER = 40,
 };
 
 char _license[] SEC("license") = "GPL";
 
-const volatile u64 slice_ns = 5 * 1000 * 1000; /* 5ms */
+const volatile u64 priority_slice_multiplier;
 const volatile bool suppress_dump;
+const volatile u32 max_dispatch;
 
 /* BPF map to store priority PIDs */
 struct {
@@ -68,12 +68,12 @@ s32 BPF_STRUCT_OPS(priority_select_cpu, struct task_struct *p, s32 prev_cpu, u64
         if (cpu >= 0) {
             /* If we found an idle CPU, enqueue directly to local DSQ */
             __sync_fetch_and_add(&nr_priority_local_sum, 1);
-		    scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | cpu, SCX_SLICE_DFL * PRIORITY_SLICE_MULTIPLIER, SCX_ENQ_HEAD);
+		    scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | cpu, SCX_SLICE_DFL * priority_slice_multiplier, SCX_ENQ_HEAD);
             return cpu;
 
         } else{
             __sync_fetch_and_add(&nr_priority_local_sum, 1);
-		    scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | prev_cpu, SCX_SLICE_DFL * PRIORITY_SLICE_MULTIPLIER, SCX_ENQ_HEAD);
+		    scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | prev_cpu, SCX_SLICE_DFL * priority_slice_multiplier, SCX_ENQ_HEAD);
             return prev_cpu;
         }
     }
@@ -105,7 +105,7 @@ void BPF_STRUCT_OPS(priority_enqueue, struct task_struct *p, u64 enq_flags)
     if (is_priority_task(p)) {
         /* Fallback: enqueue to local DSQ if somehow reached here */
 	    cpu = pick_direct_dispatch_cpu(p, scx_bpf_task_cpu(p));
-	    scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | cpu, SCX_SLICE_DFL * PRIORITY_SLICE_MULTIPLIER, SCX_ENQ_HEAD);
+	    scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | cpu, SCX_SLICE_DFL * priority_slice_multiplier, SCX_ENQ_HEAD);
         __sync_fetch_and_add(&nr_priority_local_sum, 1);
         return;
     }
@@ -117,12 +117,16 @@ void BPF_STRUCT_OPS(priority_enqueue, struct task_struct *p, u64 enq_flags)
 void BPF_STRUCT_OPS(priority_dispatch, s32 cpu, struct task_struct *prev)
 {
     struct task_struct *p;
+    u32 moved = 0;
     /* scan NONPRI_DSQ and move a task to SHARED_DSQ */
     bpf_for_each(scx_dsq, p, NONPRI_DSQ, 0) {
 	__COMPAT_scx_bpf_dsq_move(BPF_FOR_EACH_ITER, p, SHARED_DSQ, 0);
         __sync_fetch_and_sub(&nr_nonpriority_custom, 1);
         __sync_fetch_and_add(&nr_dispatched_global_sum, 1);
-        break;
+        moved++;
+        if (moved >= max_dispatch) {
+            break;
+        }
     }
 
     /* Consume from global DSQ */
