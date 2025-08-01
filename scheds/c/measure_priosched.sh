@@ -159,7 +159,13 @@ main() {
         done
     done
 
+    # ログファイルのコピーを取る(年月日形式でディレクトリを作成)
+    TIMESTAMP=$(date +"%Y-%m%d-%H%M")
+    mkdir -p "/home/hirata/logs/$TIMESTAMP"
+    cp "$OUTPUT_FILE1" "/home/hirata/logs/$TIMESTAMP/$OUTPUT_FILE1"
+    cp "$OUTPUT_FILE2" "/home/hirata/logs/$TIMESTAMP/$OUTPUT_FILE2"
 
+    echo "Benchmark completed. Results saved to $OUTPUT_FILE1 and $OUTPUT_FILE2"
 }
 
 # 実行
