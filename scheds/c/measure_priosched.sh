@@ -64,6 +64,7 @@ run_benchmark() {
     local nonpriority_count=$4
     local iteration=$5
     
+    echo ""
     echo "Running iteration $iteration with $nonpriority_count non-priority tasks"
     echo "Parameters: slice_mult=$slice_mult, dispatch_limit=$dispatch_limit, infinity_count=$infinity_count"
     
