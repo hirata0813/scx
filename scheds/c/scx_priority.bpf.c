@@ -124,7 +124,7 @@ void BPF_STRUCT_OPS(priority_dispatch, s32 cpu, struct task_struct *prev)
         __sync_fetch_and_sub(&nr_nonpriority_custom, 1);
         __sync_fetch_and_add(&nr_dispatched_global_sum, 1);
         moved++;
-        if (moved >= max_dispatch) {
+        if ((max_dispatch > 0) && (moved >= max_dispatch)) {
             break;
         }
     }
