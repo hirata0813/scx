@@ -23,8 +23,11 @@ int main(int argc, char *argv[]) {
     volatile int sum = 0;
     struct timespec start, end;
     double elapsed;
-    int num_nonprio = atoi(argv[1]); // 第一引数で非優先度タスクの数
-    int iteration = atoi(argv[2]); // 第二引数でイテレーション数
+    int slice_mult = atoi(argv[1]); // 第一引数でタイムスライスにかける数
+    int dispatch_limit = atoi(argv[2]); // 第ニ引数で非優先タスクのディスパッチ数
+    int infinity_count = atoi(argv[3]); // 第三引数で無限ループの数
+    int num_nonprio = atoi(argv[4]); // 第四引数で非優先度タスクの数
+    int iteration = atoi(argv[5]); // 第五引数でイテレーション数
     FILE *fp = fopen("nonpriority-task-result.csv","a");;
 
     if (!fp) {
@@ -70,7 +73,11 @@ int main(int argc, char *argv[]) {
     elapsed = (end.tv_sec - start.tv_sec) +
                      (end.tv_nsec - start.tv_nsec) / 1e9;
 
-    fprintf(fp, "%d,%d,%.6f\n", num_nonprio, iteration, elapsed);
+    // ロック取得
+    flock(fd, LOCK_EX);
+
+    fprintf(fp, "%d,%d,%d,%d,%d,%.6f\n", slice_mult, dispatch_limit, infinity_count, num_nonprio, iteration, elapsed);
+
     // ロック解除
     flock(fd, LOCK_UN);
     fclose(fp);
