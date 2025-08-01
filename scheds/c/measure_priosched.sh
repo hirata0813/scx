@@ -104,7 +104,7 @@ run_benchmark() {
 
     # infinity loopタスクを強制終了
     echo "Terminating remaining infinity loop tasks..."
-    for infinityloop_pid in "${inifinityloop_pids[@]}"; do
+    for infinityloop_pid in "${infinityloop_pids[@]}"; do
         if kill -0 "$infinityloop_pid" 2>/dev/null; then
             echo "Killing remaining task (PID: $infinityloop_pid)"
             kill -TERM "$infinityloop_pid" 2>/dev/null
@@ -123,7 +123,7 @@ main() {
     slice_multipliers=(1 2 10 50)         # タイムスライスの倍率
     dispatch_limits=(1 10 100 -1)         # ディスパッチ制限数（-1は無制限）
     infinity_counts=(0 1 16 80)           # infinity_loopの数
-    
+
     # タイムスライスの差を変えて(同じ，2倍，10倍，50倍)測定
     for slice_mult in "${slice_multipliers[@]}"; do
         echo ""
@@ -143,12 +143,12 @@ main() {
                 echo "Testing with ${infinity_count} infinity loops"
 
                 # 各nonpriority task数(1~10)について測定
-                for ((nonpriority_count=1; nonpriority_count<=MAX_NONPRIORITY_TASKS; nonpriority_count++)); do
+		for (nonpriority_count=1; nonpriority_count<=MAX_NONPRIORITY_TASKS; nonpriority_count++); do
                     echo ""
                     echo "=== Testing with $nonpriority_count non-priority tasks ==="
 
                     # 各イテレーション(1~10)について測定
-                    for ((iteration=1; iteration<=ITERATIONS; iteration++)); do
+                    for (iteration=1; iteration<=ITERATIONS; iteration++); do
                         run_benchmark $slice_mult $dispatch_limit $infinity_count $nonpriority_count $iteration
                         sleep 10  # 測定間隔
                     done
