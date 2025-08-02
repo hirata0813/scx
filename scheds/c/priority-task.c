@@ -45,7 +45,7 @@ int main(int argc, char *argv[]) {
     }
 
 
-    for (long long i=0; i < 100000000000LL; i++){
+    for (long long i=0; i < 50000000000LL; i++){
             sum++;
     }
 
