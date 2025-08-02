@@ -18,11 +18,11 @@ OUTPUT_FILE2="nonpriority-task-result.csv"
 
 # 前回のログファイルを削除
 if [ -e ${OUTPUT_FILE1} ]; then
-  rm ${OUTPUT_FILE1}
+  sudo rm ${OUTPUT_FILE1}
 fi
 
 if [ -e ${OUTPUT_FILE2} ]; then
-  rm ${OUTPUT_FILE2}
+  sudo rm ${OUTPUT_FILE2}
 fi
 
 # CSVのヘッダ
@@ -120,35 +120,35 @@ main() {
     echo "Starting benchmark with scx_priority scheduler"
 
     # パラメータ配列の定義
-    slice_multipliers=(1 2 10 50)         # タイムスライスの倍率
-    dispatch_limits=(1 10 100 -1)         # ディスパッチ制限数（-1は無制限）
-    infinity_counts=(0 1 16 80)           # infinity_loopの数
+    slice_multipliers=(50 10)         # タイムスライスの倍率
+    dispatch_limits=(1)         # ディスパッチ制限数（-1は無制限）
+    infinity_counts=(1 16 0 80)           # infinity_loopの数
 
-    # タイムスライスの差を変えて(同じ，2倍，10倍，50倍)測定
-    for slice_mult in "${slice_multipliers[@]}"; do
+    # 非優先タスクのディスパッチ数を変えながら測定
+    for dispatch_limit in "${dispatch_limits[@]}"; do
         echo ""
-        echo "========================================="
-        echo "Testing with slice multiplier: ${slice_mult}"
-        echo "========================================="
+        echo "=============================================="
+        echo "Testing with dispatch limit: ${dispatch_limit}"
+        echo "=============================================="
 
-        # 非優先タスクのディスパッチ数を変えながら(1，10，100，全部(-1を指定))測定
-        for dispatch_limit in "${dispatch_limits[@]}"; do
+    	# タイムスライスの差を変えて測定
+    	for slice_mult in "${slice_multipliers[@]}"; do
             echo ""
-            echo "--- Testing with dispatch limit: ${dispatch_limit} ---"
+            echo "--- Testing with slice multiplier: ${slice_mult} ---"
             check_scheduler $slice_mult $dispatch_limit
     
-            # infinity_loop の数を変えながら(0,1,16,80)について測定
+            # infinity_loop の数を変えながらについて測定
             for infinity_count in "${infinity_counts[@]}"; do
                 echo ""
                 echo "Testing with ${infinity_count} infinity loops"
 
                 # 各nonpriority task数(1~10)について測定
-		for ((nonpriority_count=1; nonpriority_count<=MAX_NONPRIORITY_TASKS; nonpriority_count++)); do
+        	for ((nonpriority_count=1; nonpriority_count<=MAX_NONPRIORITY_TASKS; nonpriority_count++)); do
                     echo ""
                     echo "=== Testing with $nonpriority_count non-priority tasks ==="
 
                     # 各イテレーション(1~10)について測定
-		    for ((iteration=1; iteration<=ITERATIONS; iteration++)); do
+        	    for ((iteration=1; iteration<=ITERATIONS; iteration++)); do
                         run_benchmark $slice_mult $dispatch_limit $infinity_count $nonpriority_count $iteration
                         sleep 10  # 測定間隔
                     done
