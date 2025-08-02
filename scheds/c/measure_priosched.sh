@@ -150,7 +150,6 @@ main() {
                     # 各イテレーション(1~10)について測定
         	    for ((iteration=1; iteration<=ITERATIONS; iteration++)); do
                         run_benchmark $slice_mult $dispatch_limit $infinity_count $nonpriority_count $iteration
-                        sleep 10  # 測定間隔
                     done
                 done
             done
