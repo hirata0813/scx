@@ -120,7 +120,7 @@ main() {
     echo "Starting benchmark with scx_priority scheduler"
 
     # パラメータ配列の定義
-    slice_multipliers=(50 10)         # タイムスライスの倍率
+    slice_multipliers=(50 1 10)         # タイムスライスの倍率
     dispatch_limits=(1)         # ディスパッチ制限数（-1は無制限）
     infinity_counts=(1 16 0 80)           # infinity_loopの数
 
@@ -143,12 +143,12 @@ main() {
                 echo "Testing with ${infinity_count} infinity loops"
 
                 # 各nonpriority task数(1~10)について測定
-        	for ((nonpriority_count=1; nonpriority_count<=MAX_NONPRIORITY_TASKS; nonpriority_count++)); do
-                    echo ""
-                    echo "=== Testing with $nonpriority_count non-priority tasks ==="
+        	for ((iteration=1; iteration<=ITERATIONS; iteration++)); do
 
                     # 各イテレーション(1~10)について測定
-        	    for ((iteration=1; iteration<=ITERATIONS; iteration++)); do
+        	    for ((nonpriority_count=1; nonpriority_count<=MAX_NONPRIORITY_TASKS; nonpriority_count++)); do
+                    	echo ""
+                    	echo "=== Testing with $nonpriority_count non-priority tasks ==="
                         run_benchmark $slice_mult $dispatch_limit $infinity_count $nonpriority_count $iteration
                     done
                 done
