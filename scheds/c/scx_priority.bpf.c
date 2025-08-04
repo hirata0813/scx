@@ -13,6 +13,8 @@ enum consts {
 
 char _license[] SEC("license") = "GPL";
 
+const volatile u32 priortask_cpu;
+const volatile bool is_fixed_prior_task;
 const volatile u64 priority_slice_multiplier;
 const volatile bool suppress_dump;
 const volatile u32 max_dispatch;
@@ -63,7 +65,11 @@ s32 BPF_STRUCT_OPS(priority_select_cpu, struct task_struct *p, s32 prev_cpu, u64
 
     if (is_priority_task(p)) {
         /* For priority tasks, try to find idle CPU or use prev_cpu */
-        cpu = scx_bpf_pick_idle_cpu(p->cpus_ptr, 0);
+	if (is_fixed_prior_task) {
+		cpu = priortask_cpu;
+	}else{
+		cpu = scx_bpf_pick_idle_cpu(p->cpus_ptr, 0);
+	}
 
         if (cpu >= 0) {
             /* If we found an idle CPU, enqueue directly to local DSQ */
@@ -85,6 +91,9 @@ s32 BPF_STRUCT_OPS(priority_select_cpu, struct task_struct *p, s32 prev_cpu, u64
 static s32 pick_direct_dispatch_cpu(struct task_struct *p, s32 prev_cpu)
 {
 	s32 cpu;
+
+	if (is_fixed_prior_task)
+		return priortask_cpu;
 
 	if (p->nr_cpus_allowed == 1 ||
 	    scx_bpf_test_and_clear_cpu_idle(prev_cpu))

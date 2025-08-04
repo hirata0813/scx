@@ -76,9 +76,14 @@ int main(int argc, char **argv)
 
 	skel->rodata->priority_slice_multiplier = ts_multi; // タイムスライスに掛ける値を設定
 	skel->rodata->max_dispatch = max_dispatch; // タイムスライスに掛ける値を設定
+	skel->rodata->is_fixed_prior_task = false;
 
-	//while ((opt = getopt(argc, argv, "s:e:t:T:l:b:PHd:D:Spvh")) != -1) {
-	//	switch (opt) {
+	while ((opt = getopt(argc, argv, "c:")) != -1) {
+		switch (opt) {
+		case 'c':
+			skel->rodata->priortask_cpu = strtoull(optarg, NULL, 0);
+			skel->rodata->is_fixed_prior_task = true;
+			break;
 	//	case 's':
 	//		skel->rodata->slice_ns = strtoull(optarg, NULL, 0) * 1000;
 	//		break;
@@ -123,8 +128,8 @@ int main(int argc, char **argv)
 	//	default:
 	//		fprintf(stderr, help_fmt, basename(argv[0]));
 	//		return opt != 'h';
-	//	}
-	//}
+		}
+	}
 
 	SCX_OPS_LOAD(skel, priority_ops, scx_priority, uei);
 
