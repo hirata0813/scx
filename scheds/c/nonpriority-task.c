@@ -18,6 +18,26 @@
 #include <scx/common.h> // scx 関連．パスはおそらく scx/scheds/include/scx/
 #include "scx_priority.bpf.skel.h" //eBPF スケジューラのスケルトン(BPF コードとのインタフェース)
 
+#define LINE_MAX_LEN 256
+
+int get_context_switches(pid_t pid, int *voluntary, int *nonvoluntary) {
+    char path[64];
+    char line[LINE_MAX_LEN];
+    snprintf(path, sizeof(path), "/proc/%d/status", pid);
+
+    FILE *fp = fopen(path, "r");
+    if (!fp) return -1;
+    while (fgets(line, sizeof(line), fp)) {
+        if (sscanf(line, "voluntary_ctxt_switches: %d", voluntary) == 1) {
+            continue;
+        } else if (sscanf(line, "nonvoluntary_ctxt_switches: %d", nonvoluntary) == 1) {
+            continue;
+        }
+    }
+
+    fclose(fp);
+    return 0;
+}
 
 int main(int argc, char *argv[]) {
     volatile int sum = 0;
@@ -29,25 +49,14 @@ int main(int argc, char *argv[]) {
     int num_nonprio = atoi(argv[4]); // 第四引数で非優先度タスクの数
     int iteration = atoi(argv[5]); // 第五引数でイテレーション数
     FILE *fp = fopen("nonpriority-task-result.csv","a");;
-
-    //if (!fp) {
-    //    perror("fopen");
-    //    return 1;
-    //}
-
     int fd = fileno(fp);
-
-    //if (flock(fd, LOCK_EX) != 0) {
-    //    perror("flock (LOCK_EX)");
-    //    fclose(fp);
-    //    return 1;
-    //}
 
     int pid = getpid();
     int tid = syscall(SYS_gettid);
     int pids_fd = bpf_obj_get("/sys/fs/bpf/priority_pids");
     int tids_fd = bpf_obj_get("/sys/fs/bpf/priority_tids");
     int flag0 = 0;
+    int voluntary = -1, nonvoluntary = -1;
 
     clock_gettime(CLOCK_MONOTONIC, &start);
 
@@ -73,10 +82,14 @@ int main(int argc, char *argv[]) {
     elapsed = (end.tv_sec - start.tv_sec) +
                      (end.tv_nsec - start.tv_nsec) / 1e9;
 
+    if (get_context_switches(pid, &voluntary, &nonvoluntary) != 0) {
+        fprintf(stderr, "Failed to read context switches for pid %d\n", pid);
+    }
+
     // ロック取得
     flock(fd, LOCK_EX);
 
-    fprintf(fp, "%d,%d,%d,%d,%d,%.6f\n", slice_mult, dispatch_limit, infinity_count, num_nonprio, iteration, elapsed);
+    fprintf(fp, "%d,%d,%d,%d,%d,%.6f,%d,%d\n", slice_mult, dispatch_limit, infinity_count, num_nonprio, iteration, elapsed, voluntary, nonvoluntary);
 
     // ロック解除
     flock(fd, LOCK_UN);
