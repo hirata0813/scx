@@ -30,18 +30,18 @@ int main(int argc, char *argv[]) {
     int iteration = atoi(argv[5]); // 第五引数でイテレーション数
     FILE *fp = fopen("nonpriority-task-result.csv","a");;
 
-    if (!fp) {
-        perror("fopen");
-        return 1;
-    }
+    //if (!fp) {
+    //    perror("fopen");
+    //    return 1;
+    //}
 
     int fd = fileno(fp);
 
-    if (flock(fd, LOCK_EX) != 0) {
-        perror("flock (LOCK_EX)");
-        fclose(fp);
-        return 1;
-    }
+    //if (flock(fd, LOCK_EX) != 0) {
+    //    perror("flock (LOCK_EX)");
+    //    fclose(fp);
+    //    return 1;
+    //}
 
     int pid = getpid();
     int tid = syscall(SYS_gettid);
