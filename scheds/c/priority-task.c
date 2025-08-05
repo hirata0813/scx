@@ -47,7 +47,7 @@ int main(int argc, char *argv[]) {
     int num_nonprio = atoi(argv[4]); // 第四引数で非優先度タスクの数
     int iteration = atoi(argv[5]); // 第五引数でイテレーション数
     FILE *fp = fopen("priority-task-result.csv","a");;
-    FILE *fp2 = fopen("priority-task-timestamp.log","a");;
+    char path[64];
 
     int pid = getpid();
     int tid = syscall(SYS_gettid);
@@ -58,6 +58,9 @@ int main(int argc, char *argv[]) {
     int voluntary = -1, nonvoluntary = -1;
     long long loop_num = 15000000000LL;
     long long space = loop_num / 100;
+
+    snprintf(path, sizeof(path), "priority-task-timestamp-%d-%d-%d.log", slice_mult, dispatch_limit, infinity_count);
+    FILE *fp2 = fopen(path,"a");;
 
     clock_gettime(CLOCK_MONOTONIC, &start);
 
