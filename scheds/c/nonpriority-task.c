@@ -60,7 +60,7 @@ int main(int argc, char *argv[]) {
     long long loop_num = 15000000000LL;
     long long space = loop_num / 100;
 
-    snprintf(path, sizeof(path), "nonpriority-task-timestamp-%d-%d-%d.csv", slice_mult, dispatch_limit, infinity_count);
+    snprintf(path, sizeof(path), "nonpriority-task-timestamp-%d-%d-%d-pid-%d.csv", slice_mult, dispatch_limit, infinity_count, pid);
     FILE *fp2 = fopen(path,"a");;
 
     fprintf(fp2, "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,loop_period\n");
