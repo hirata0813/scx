@@ -48,8 +48,8 @@ int main(int argc, char *argv[]) {
     int num_nonprio = atoi(argv[4]); // 第四引数で非優先度タスクの数
     int iteration = atoi(argv[5]); // 第五引数でイテレーション数
     FILE *fp = fopen("nonpriority-task-result.csv","a");;
-    FILE *fp2 = fopen("nonpriority-task-timestamp.log","a");;
     int fd = fileno(fp);
+    char path[64];
 
     int pid = getpid();
     int tid = syscall(SYS_gettid);
@@ -59,6 +59,11 @@ int main(int argc, char *argv[]) {
     int voluntary = -1, nonvoluntary = -1;
     long long loop_num = 15000000000LL;
     long long space = loop_num / 100;
+
+    snprintf(path, sizeof(path), "nonpriority-task-timestamp-%d-%d-%d.csv", slice_mult, dispatch_limit, infinity_count);
+    FILE *fp2 = fopen(path,"a");;
+
+    fprintf(fp2, "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,loop_period\n");
 
     clock_gettime(CLOCK_MONOTONIC, &start);
 
@@ -74,7 +79,7 @@ int main(int argc, char *argv[]) {
 	    // ある間隔でタイムスタンプを残す
 	    if (i % space == 0){
 	        clock_gettime(CLOCK_MONOTONIC, &ts);
-    	    	fprintf(fp2, "timestamp: %.6f\n", (ts.tv_sec - ts_prior.tv_sec) + (ts.tv_nsec - ts_prior.tv_nsec) / 1e9);
+		fprintf(fp2, "%d,%d,%d,%d,%d,%.6f\n", slice_mult, dispatch_limit, infinity_count, num_nonprio, iteration, (ts.tv_sec - ts_prior.tv_sec) + (ts.tv_nsec - ts_prior.tv_nsec) / 1e9);
 	        ts_prior = ts;
 	    }
     }
