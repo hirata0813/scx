@@ -27,8 +27,8 @@ fi
 
 # CSVのヘッダ
 # タイムスライスの差，非優先タスクディスパッチ数，無限ループの数，非優先タスクの数，イテレーション，実行時間 の6つ組データを1行とする
-echo "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,prio_elapsed_time" > "$OUTPUT_FILE1"
-echo "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,nonprio_elapsed_time" > "$OUTPUT_FILE2"
+echo "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,prio_elapsed_time,voluntary_cts,nonvoluntary_cts" > "$OUTPUT_FILE1"
+echo "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,nonprio_elapsed_time,voluntary_cts,nonvoluntary_cts" > "$OUTPUT_FILE2"
 
 # scx_priorityが動いているか確認
 check_scheduler() {
@@ -37,6 +37,21 @@ check_scheduler() {
     if ! pgrep -f "scx_priority" > /dev/null; then
       echo "Starting priority scheduler..."
       sudo $PRIORITY_SCHED $ts_multi $num_dispatch &
+  
+      # スケジューラが起動するまで待つ
+      sleep 2
+  
+    fi
+
+    echo "scx_priority is running. Proceeding with benchmark..."
+}
+
+check_scheduler_priotask_cpu_fixed() {
+    local ts_multi=$1
+    local num_dispatch=$2
+    if ! pgrep -f "scx_priority" > /dev/null; then
+      echo "Starting priority scheduler..."
+      sudo $PRIORITY_SCHED $ts_multi $num_dispatch -c 0 &
   
       # スケジューラが起動するまで待つ
       sleep 2
@@ -120,44 +135,90 @@ main() {
     echo "Starting benchmark with scx_priority scheduler"
 
     # パラメータ配列の定義
-    slice_multipliers=(50 1 10)         # タイムスライスの倍率
+    slice_multipliers=(50)         # タイムスライスの倍率
     dispatch_limits=(1)         # ディスパッチ制限数（-1は無制限）
-    infinity_counts=(1 16 0 80)           # infinity_loopの数
+    infinity_counts=(1 4)           # infinity_loopの数
 
     # 非優先タスクのディスパッチ数を変えながら測定
-    for dispatch_limit in "${dispatch_limits[@]}"; do
-        echo ""
-        echo "=============================================="
-        echo "Testing with dispatch limit: ${dispatch_limit}"
-        echo "=============================================="
+    #for dispatch_limit in "${dispatch_limits[@]}"; do
+    #    echo ""
+    #    echo "=============================================="
+    #    echo "Testing with dispatch limit: ${dispatch_limit}"
+    #    echo "=============================================="
 
-    	# タイムスライスの差を変えて測定
-    	for slice_mult in "${slice_multipliers[@]}"; do
-            echo ""
-            echo "--- Testing with slice multiplier: ${slice_mult} ---"
-            check_scheduler $slice_mult $dispatch_limit
-    
-            # infinity_loop の数を変えながらについて測定
-            for infinity_count in "${infinity_counts[@]}"; do
-                echo ""
-                echo "Testing with ${infinity_count} infinity loops"
+    #	# タイムスライスの差を変えて測定
+    #	for slice_mult in "${slice_multipliers[@]}"; do
+    #        echo ""
+    #        echo "--- Testing with slice multiplier: ${slice_mult} ---"
+    #        check_scheduler_priotask_cpu_fixed $slice_mult $dispatch_limit
+    #
+    #        # infinity_loop の数を変えながらについて測定
+    #        for infinity_count in "${infinity_counts[@]}"; do
+    #            echo ""
+    #            echo "Testing with ${infinity_count} infinity loops"
 
-                # 各nonpriority task数(1~10)について測定
-        	for ((iteration=1; iteration<=ITERATIONS; iteration++)); do
+    #            # 各nonpriority task数(1~10)について測定
+    #    	for ((iteration=1; iteration<=ITERATIONS; iteration++)); do
 
-                    # 各イテレーション(1~10)について測定
-        	    for ((nonpriority_count=1; nonpriority_count<=MAX_NONPRIORITY_TASKS; nonpriority_count++)); do
-                    	echo ""
-                    	echo "=== Testing with $nonpriority_count non-priority tasks ==="
-                        run_benchmark $slice_mult $dispatch_limit $infinity_count $nonpriority_count $iteration
-                    done
-                done
-            done
+    #                # 各イテレーション(1~10)について測定
+    #    	    for ((nonpriority_count=1; nonpriority_count<=MAX_NONPRIORITY_TASKS; nonpriority_count++)); do
+    #                	echo ""
+    #                	echo "=== Testing with $nonpriority_count non-priority tasks ==="
+    #                    run_benchmark $slice_mult $dispatch_limit $infinity_count $nonpriority_count $iteration
+    #                done
+    #            done
+    #        done
 
-            # スケジューラの停止
-            stop_scheduler
-        done
-    done
+    #        # スケジューラの停止
+    #        stop_scheduler
+    #    done
+    #done
+
+    echo "===================================================" >> "$OUTPUT_FILE1"
+    echo "above datas are cpu-fixed version" >> "$OUTPUT_FILE1"
+    echo "below datas are cpu-nonfixed version" >> "$OUTPUT_FILE1"
+    echo "===================================================" >> "$OUTPUT_FILE1"
+
+    echo "===================================================" >> "$OUTPUT_FILE2"
+    echo "above datas are cpu-fixed version" >> "$OUTPUT_FILE2"
+    echo "below datas are cpu-nonfixed version" >> "$OUTPUT_FILE2"
+    echo "===================================================" >> "$OUTPUT_FILE2"
+
+    # 非優先タスクのディスパッチ数を変えながら測定
+    #for dispatch_limit in "${dispatch_limits[@]}"; do
+    #    echo ""
+    #    echo "=============================================="
+    #    echo "Testing with dispatch limit: ${dispatch_limit}"
+    #    echo "=============================================="
+
+    #	# タイムスライスの差を変えて測定
+    #	for slice_mult in "${slice_multipliers[@]}"; do
+    #        echo ""
+    #        echo "--- Testing with slice multiplier: ${slice_mult} ---"
+    #        check_scheduler $slice_mult $dispatch_limit
+    #
+    #        # infinity_loop の数を変えながらについて測定
+    #        for infinity_count in "${infinity_counts[@]}"; do
+    #            echo ""
+    #            echo "Testing with ${infinity_count} infinity loops"
+
+    #            # 各nonpriority task数(1~10)について測定
+    #    	for ((iteration=1; iteration<=ITERATIONS; iteration++)); do
+
+    #                # 各イテレーション(1~10)について測定
+    #    	    for ((nonpriority_count=1; nonpriority_count<=MAX_NONPRIORITY_TASKS; nonpriority_count++)); do
+    #                	echo ""
+    #                	echo "=== Testing with $nonpriority_count non-priority tasks ==="
+    #                    run_benchmark $slice_mult $dispatch_limit $infinity_count $nonpriority_count $iteration
+    #                done
+    #            done
+    #        done
+
+    #        # スケジューラの停止
+    #        stop_scheduler
+    #    done
+    #done
+
 
     # ログファイルのコピーを取る(年月日形式でディレクトリを作成)
     TIMESTAMP=$(date +"%Y-%m%d-%H%M")
