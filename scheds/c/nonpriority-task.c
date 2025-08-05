@@ -40,8 +40,7 @@ int get_context_switches(pid_t pid, int *voluntary, int *nonvoluntary) {
 }
 
 int main(int argc, char *argv[]) {
-    volatile int sum = 0;
-    struct timespec start, end;
+    struct timespec start, end, ts, ts_prior;
     double elapsed;
     int slice_mult = atoi(argv[1]); // 第一引数でタイムスライスにかける数
     int dispatch_limit = atoi(argv[2]); // 第ニ引数で非優先タスクのディスパッチ数
@@ -49,6 +48,7 @@ int main(int argc, char *argv[]) {
     int num_nonprio = atoi(argv[4]); // 第四引数で非優先度タスクの数
     int iteration = atoi(argv[5]); // 第五引数でイテレーション数
     FILE *fp = fopen("nonpriority-task-result.csv","a");;
+    FILE *fp2 = fopen("nonpriority-task-timestamp.log","a");;
     int fd = fileno(fp);
 
     int pid = getpid();
@@ -57,6 +57,8 @@ int main(int argc, char *argv[]) {
     int tids_fd = bpf_obj_get("/sys/fs/bpf/priority_tids");
     int flag0 = 0;
     int voluntary = -1, nonvoluntary = -1;
+    long long loop_num = 15000000000LL;
+    long long space = loop_num / 100;
 
     clock_gettime(CLOCK_MONOTONIC, &start);
 
@@ -66,10 +68,18 @@ int main(int argc, char *argv[]) {
          bpf_map_update_elem(tids_fd, &tid, &flag0, BPF_ANY);
     }
 
-
-    for (long long i=0; i < 50000000000LL; i++){
-            sum++;
+    clock_gettime(CLOCK_MONOTONIC, &ts_prior);
+    for (volatile long long i=0; i < loop_num; i++){
+            //sum++;
+	    // ある間隔でタイムスタンプを残す
+	    if (i % space == 0){
+	        clock_gettime(CLOCK_MONOTONIC, &ts);
+    	    	fprintf(fp2, "timestamp: %.6f\n", (ts.tv_sec - ts_prior.tv_sec) + (ts.tv_nsec - ts_prior.tv_nsec) / 1e9);
+	        ts_prior = ts;
+	    }
     }
+
+
 
     // フラグを戻す
     if (pids_fd >= 3 && tids_fd >= 3){
@@ -85,6 +95,8 @@ int main(int argc, char *argv[]) {
     if (get_context_switches(pid, &voluntary, &nonvoluntary) != 0) {
         fprintf(stderr, "Failed to read context switches for pid %d\n", pid);
     }
+
+    fprintf(fp2, "\n\n");
 
     // ロック取得
     flock(fd, LOCK_EX);
