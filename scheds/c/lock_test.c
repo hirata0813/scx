@@ -43,6 +43,7 @@ void *worker(void *arg) {
     int tids_fd = bpf_obj_get("/sys/fs/bpf/priority_tids");
     int flag0 = 0;
     int flag1 = 1;
+    FILE *fp = fopen("locktest.log","a");
 
     while (count < increments_per_thread) {
         if (false) {
@@ -57,13 +58,18 @@ void *worker(void *arg) {
         }
 
         // ロック取得成功
-        global_counter++; //共有リソースのインクリメント
-        count++;
 	// BPF MAP の更新
 	if (pids_fd >= 3 && tids_fd >= 3){
 		bpf_map_update_elem(pids_fd, &pid, &flag1, BPF_ANY);
 		bpf_map_update_elem(tids_fd, &tid, &flag1, BPF_ANY);
 	}
+
+        global_counter++; //共有リソースのインクリメント
+        count++;
+
+	// スレッドIDをログファイルに書き込む(ロックを取得したスレッドを，スケジューラが正しく把握できているかの確認に用いる)
+	//fprintf(fp, "pid: %d, tid: %d\n", pid, tid);	
+	printf("pid: %d, tid: %d\n", pid, tid);	
 
         // ロック解除
         if (false) {
@@ -71,7 +77,7 @@ void *worker(void *arg) {
         } else {
             // ループ処理で，ロック保持時間を少し長くする(スピンロックと似通うことを防ぐため)
             // 1s程度かかるループ処理を挟む
-            for (int i=0; i<2000000000; i++){
+            for (volatile int i=0; i<2000000000; i++){
                     sum++;
             }
 	    // フラグを戻す
