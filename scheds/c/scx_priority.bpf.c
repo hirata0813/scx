@@ -15,6 +15,7 @@ char _license[] SEC("license") = "GPL";
 
 const volatile u32 priortask_cpu;
 const volatile bool is_fixed_prior_task;
+const volatile bool is_owned_prior_task_cpu;
 const volatile u64 priority_slice_multiplier;
 const volatile bool suppress_dump;
 const volatile u32 max_dispatch;
@@ -88,6 +89,16 @@ s32 BPF_STRUCT_OPS(priority_select_cpu, struct task_struct *p, s32 prev_cpu, u64
     if (is_priority_task(p) && is_fixed_prior_task){
     	return priortask_cpu;
     }
+
+    if (is_priority_task(p) == false && is_fixed_prior_task && is_owned_prior_task_cpu){
+    	cpu = scx_bpf_select_cpu_dfl(p, prev_cpu, wake_flags, &dummy);
+	if (cpu == 0){
+		return 1;
+	}else{
+		return cpu;
+	}
+    }
+
     return scx_bpf_select_cpu_dfl(p, prev_cpu, wake_flags, &dummy);
 }
 

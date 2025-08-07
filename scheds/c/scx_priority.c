@@ -78,11 +78,16 @@ int main(int argc, char **argv)
 	skel->rodata->max_dispatch = max_dispatch; // タイムスライスに掛ける値を設定
 	skel->rodata->is_fixed_prior_task = false;
 
-	while ((opt = getopt(argc, argv, "c:")) != -1) {
+	while ((opt = getopt(argc, argv, "cC")) != -1) {
 		switch (opt) {
 		case 'c':
-			skel->rodata->priortask_cpu = strtoull(optarg, NULL, 0);
+			skel->rodata->priortask_cpu = 0;
 			skel->rodata->is_fixed_prior_task = true;
+			break;
+		case 'C': //優先タスクはCPU0を占有
+			skel->rodata->priortask_cpu = 0;
+			skel->rodata->is_fixed_prior_task = true;
+			skel->rodata->is_owned_prior_task_cpu = true;
 			break;
 	//	case 's':
 	//		skel->rodata->slice_ns = strtoull(optarg, NULL, 0) * 1000;
