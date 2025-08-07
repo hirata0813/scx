@@ -39,7 +39,8 @@ int get_context_switches(pid_t pid, int *voluntary, int *nonvoluntary) {
 }
 
 int main(int argc, char *argv[]) {
-    struct timespec start, end, ts, ts_prior;
+    volatile int sum = 0;
+    struct timespec start, end;
     double elapsed;
     int slice_mult = atoi(argv[1]); // 第一引数でタイムスライスにかける数
     int dispatch_limit = atoi(argv[2]); // 第ニ引数で非優先タスクのディスパッチ数
@@ -47,7 +48,6 @@ int main(int argc, char *argv[]) {
     int num_nonprio = atoi(argv[4]); // 第四引数で非優先度タスクの数
     int iteration = atoi(argv[5]); // 第五引数でイテレーション数
     FILE *fp = fopen("priority-task-result.csv","a");;
-    char path[64];
 
     int pid = getpid();
     int tid = syscall(SYS_gettid);
@@ -56,13 +56,6 @@ int main(int argc, char *argv[]) {
     int flag0 = 0;
     int flag1 = 1;
     int voluntary = -1, nonvoluntary = -1;
-    long long loop_num = 15000000000LL;
-    long long space = loop_num / 100;
-
-    snprintf(path, sizeof(path), "priority-task-timestamp-%d-%d-%d.csv", slice_mult, dispatch_limit, infinity_count);
-    FILE *fp2 = fopen(path,"a");;
-
-    fprintf(fp2, "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,loop_period\n");
 
     clock_gettime(CLOCK_MONOTONIC, &start);
 
@@ -72,16 +65,9 @@ int main(int argc, char *argv[]) {
          bpf_map_update_elem(tids_fd, &tid, &flag1, BPF_ANY);
     }
 
-    clock_gettime(CLOCK_MONOTONIC, &ts_prior);
 
-    for (volatile long long i=0; i < loop_num; i++){
-            //sum++;
-	    // ある間隔でタイムスタンプを残す
-	    if (i % space == 0){
-	        clock_gettime(CLOCK_MONOTONIC, &ts);
-    	    	fprintf(fp2, "%d,%d,%d,%d,%d,%.6f\n", slice_mult, dispatch_limit, infinity_count, num_nonprio, iteration, (ts.tv_sec - ts_prior.tv_sec) + (ts.tv_nsec - ts_prior.tv_nsec) / 1e9);
-	        ts_prior = ts;
-	    }
+    for (long long i=0; i < 50000000000LL; i++){
+            sum++;
     }
 
     // フラグを戻す
@@ -98,8 +84,6 @@ int main(int argc, char *argv[]) {
     if (get_context_switches(pid, &voluntary, &nonvoluntary) != 0) {
         fprintf(stderr, "Failed to read context switches for pid %d\n", pid);
     }
-
-    fprintf(fp2, "\n\n");
 
     fprintf(fp, "%d,%d,%d,%d,%d,%.6f,%d,%d\n", slice_mult, dispatch_limit, infinity_count, num_nonprio, iteration, elapsed, voluntary, nonvoluntary);
 
