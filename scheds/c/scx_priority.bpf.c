@@ -85,6 +85,9 @@ s32 BPF_STRUCT_OPS(priority_select_cpu, struct task_struct *p, s32 prev_cpu, u64
     //}
 
     /* For non-priority tasks, just return appropriate CPU */
+    if (is_priority_task(p) && is_fixed_prior_task){
+    	return priortask_cpu;
+    }
     return scx_bpf_select_cpu_dfl(p, prev_cpu, wake_flags, &dummy);
 }
 
@@ -119,8 +122,11 @@ void BPF_STRUCT_OPS(priority_enqueue, struct task_struct *p, u64 enq_flags)
     //}
     /* Non-priority tasks go to local DSQ, too. */
     if (is_priority_task(p)) {
+	if (is_fixed_prior_task){
+    		scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | priortask_cpu, SCX_SLICE_DFL, SCX_ENQ_HEAD);
+		return;
+	}
     	scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL, SCX_SLICE_DFL, SCX_ENQ_HEAD);
-
     }else{
     	scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL, SCX_SLICE_DFL, 0);
     }
@@ -141,6 +147,7 @@ void BPF_STRUCT_OPS(priority_dispatch, s32 cpu, struct task_struct *prev)
             break;
         }
     }
+
 
     /* Consume from global DSQ */
     scx_bpf_dsq_move_to_local(SHARED_DSQ);
