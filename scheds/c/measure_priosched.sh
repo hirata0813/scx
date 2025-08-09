@@ -182,7 +182,7 @@ main() {
     	for slice_mult in "${slice_multipliers[@]}"; do
             echo ""
             echo "--- Testing with slice multiplier: ${slice_mult} ---"
-	    check_simple_scheduler $slice_mult $dispatch_limit
+            check_simple_scheduler $slice_mult $dispatch_limit
     
             # infinity_loop の数を変えながらについて測定
             for infinity_count in "${infinity_counts[@]}"; do
@@ -207,8 +207,6 @@ main() {
     done
 
     # 計測1: ログファイルのコピーを取る
-    echo "measure1" >> "$OUTPUT_FILE1"
-    echo "measure1" >> "$OUTPUT_FILE2"
 
     mkdir -p "/home/hirata/logs/simple_scx"
     cp "$OUTPUT_FILE1" "/home/hirata/logs/simple_scx/$OUTPUT_FILE1"
@@ -228,7 +226,7 @@ main() {
     	for slice_mult in "${slice_multipliers[@]}"; do
             echo ""
             echo "--- Testing with slice multiplier: ${slice_mult} ---"
-	    check_scheduler $slice_mult $dispatch_limit
+            check_scheduler $slice_mult $dispatch_limit
     
             # infinity_loop の数を変えながらについて測定
             for infinity_count in "${infinity_counts[@]}"; do
@@ -253,8 +251,6 @@ main() {
     done
 
     # 計測2: ログファイルのコピーを取る
-    echo "measure2" >> "$OUTPUT_FILE1"
-    echo "measure2" >> "$OUTPUT_FILE2"
 
     mkdir -p "/home/hirata/logs/only_queueing"
     cp "$OUTPUT_FILE1" "/home/hirata/logs/only_queueing/$OUTPUT_FILE1"
@@ -274,7 +270,7 @@ main() {
     	for slice_mult in "${slice_multipliers[@]}"; do
             echo ""
             echo "--- Testing with slice multiplier: ${slice_mult} ---"
-	    check_scheduler_priotask_cpu_fixed $slice_mult $dispatch_limit
+            check_scheduler_priotask_cpu_fixed $slice_mult $dispatch_limit
     
             # infinity_loop の数を変えながらについて測定
             for infinity_count in "${infinity_counts[@]}"; do
@@ -299,8 +295,6 @@ main() {
     done
 
     # 計測3: ログファイルのコピーを取る
-    echo "measure3" >> "$OUTPUT_FILE1"
-    echo "measure3" >> "$OUTPUT_FILE2"
 
     mkdir -p "/home/hirata/logs/queueing_and_cpufix"
     cp "$OUTPUT_FILE1" "/home/hirata/logs/queueing_and_cpufix/$OUTPUT_FILE1"
@@ -320,7 +314,7 @@ main() {
     	for slice_mult in "${slice_multipliers[@]}"; do
             echo ""
             echo "--- Testing with slice multiplier: ${slice_mult} ---"
-	    check_scheduler_priotask_cpu_owned $slice_mult $dispatch_limit
+            check_scheduler_priotask_cpu_owned $slice_mult $dispatch_limit
     
             # infinity_loop の数を変えながらについて測定
             for infinity_count in "${infinity_counts[@]}"; do
@@ -345,8 +339,6 @@ main() {
     done
 
     # 計測4: ログファイルのコピーを取る
-    echo "measure4" >> "$OUTPUT_FILE1"
-    echo "measure4" >> "$OUTPUT_FILE2"
 
     mkdir -p "/home/hirata/logs/queueing_and_cpuown"
     cp "$OUTPUT_FILE1" "/home/hirata/logs/queueing_and_cpuown/$OUTPUT_FILE1"
@@ -366,7 +358,7 @@ main() {
     	for slice_mult in "${slice_multipliers[@]}"; do
             echo ""
             echo "--- Testing with slice multiplier: ${slice_mult} ---"
-	    check_scheduler $slice_mult $dispatch_limit
+            check_scheduler $slice_mult $dispatch_limit
     
             # infinity_loop の数を変えながらについて測定
             for infinity_count in "${infinity_counts[@]}"; do
@@ -391,8 +383,6 @@ main() {
     done
 
     # 計測5: ログファイルのコピーを取る
-    echo "measure5" >> "$OUTPUT_FILE1"
-    echo "measure5" >> "$OUTPUT_FILE2"
 
     mkdir -p "/home/hirata/logs/queueing_and_different_cpu_selection"
     cp "$OUTPUT_FILE1" "/home/hirata/logs/queueing_and_different_cpu_selection/$OUTPUT_FILE1"

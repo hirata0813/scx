@@ -1,0 +1,182 @@
+/* SPDX-License-Identifier: GPL-2.0 */
+/*
+ * A scheduler that prioritizes specific tasks by enqueuing them directly
+ * to local DSQ while routing non-priority tasks through a custom DSQ.
+ */
+#include <scx/common.bpf.h>
+
+enum consts {
+    ONE_SEC_IN_NS		= 1000000000,
+    SHARED_DSQ		= 0,
+    NONPRI_DSQ		= 1,
+};
+
+char _license[] SEC("license") = "GPL";
+
+const volatile u32 priortask_cpu;
+const volatile bool is_fixed_prior_task;
+const volatile bool is_owned_prior_task_cpu;
+const volatile u64 priority_slice_multiplier;
+const volatile bool suppress_dump;
+const volatile u32 max_dispatch;
+
+/* BPF map to store priority PIDs */
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 8192);
+    __type(key, pid_t);
+    __type(value, u8); /* flag: 1 if priority task */
+} priority_pids SEC(".maps");
+
+/* BPF map to store priority TIDs */
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 8192);
+    __type(key, pid_t);
+    __type(value, u8); /* flag: 1 if priority task */
+} priority_tids SEC(".maps");
+
+/* Statistics */
+u64 nr_priority_local_sum = 0;
+u64 nr_nonpriority_custom = 0;
+u64 nr_dispatched_global_sum = 0;
+
+UEI_DEFINE(uei);
+
+/* Check if task is priority task */
+static bool is_priority_task(struct task_struct *p)
+{
+    pid_t pid = p->pid;
+    pid_t tgid = p->tgid;
+    u8 *val1, *val2;
+    
+    /* Check if PID is in priority list */
+    val1 = bpf_map_lookup_elem(&priority_pids, &tgid);
+
+    /* Check if TID is in priority list */
+    val2 = bpf_map_lookup_elem(&priority_tids, &pid);
+
+    return ((val1 != NULL && *val1 == 1) && (val2 != NULL && *val2 == 1));
+}
+
+s32 BPF_STRUCT_OPS(priority_cpuselection_select_cpu, struct task_struct *p, s32 prev_cpu, u64 wake_flags)
+{
+    s32 cpu;
+    u64 dummy;
+
+    if (is_priority_task(p)) {
+        /* For priority tasks, try to find idle CPU or use prev_cpu */
+        if (is_fixed_prior_task) {
+        	cpu = priortask_cpu;
+		return cpu;
+        }else{
+        	cpu = scx_bpf_pick_idle_cpu(p->cpus_ptr, 0);
+
+        	if (cpu >= 0) {
+        	    /* If we found an idle CPU, enqueue directly to local DSQ */
+        	    __sync_fetch_and_add(&nr_priority_local_sum, 1);
+        	    scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | cpu, SCX_SLICE_DFL * priority_slice_multiplier, SCX_ENQ_HEAD);
+        	    return cpu;
+
+        	} else{
+        	    __sync_fetch_and_add(&nr_priority_local_sum, 1);
+        	    scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | prev_cpu, SCX_SLICE_DFL * priority_slice_multiplier, SCX_ENQ_HEAD);
+        	    return prev_cpu;
+        	}
+        }
+
+    }
+
+    /* For non-priority tasks, just return appropriate CPU */
+
+    if (is_priority_task(p) == false && is_fixed_prior_task && is_owned_prior_task_cpu){
+    	cpu = scx_bpf_select_cpu_dfl(p, prev_cpu, wake_flags, &dummy);
+	if (cpu == 0){
+		return 1;
+	}else{
+		return cpu;
+	}
+    }
+
+    return scx_bpf_select_cpu_dfl(p, prev_cpu, wake_flags, &dummy);
+}
+
+static s32 pick_direct_dispatch_cpu(struct task_struct *p, s32 prev_cpu)
+{
+	s32 cpu;
+
+	if (is_fixed_prior_task)
+		return priortask_cpu;
+
+	if (p->nr_cpus_allowed == 1 ||
+	    scx_bpf_test_and_clear_cpu_idle(prev_cpu))
+		return prev_cpu;
+
+	cpu = scx_bpf_pick_idle_cpu(p->cpus_ptr, 0);
+	if (cpu >= 0)
+		return cpu;
+
+	return prev_cpu;
+}
+
+
+void BPF_STRUCT_OPS(priority_cpuselection_enqueue, struct task_struct *p, u64 enq_flags)
+{
+    s32 cpu;
+    /* Priority tasks should not reach enqueue as they are handled in select_cpu */
+    if (is_priority_task(p)) {
+        /* Fallback: enqueue to local DSQ if somehow reached here */
+	if (is_fixed_prior_task){
+    		scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | priortask_cpu, SCX_SLICE_DFL, SCX_ENQ_HEAD);
+		return;
+	}
+
+        cpu = pick_direct_dispatch_cpu(p, scx_bpf_task_cpu(p));
+        scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | cpu, SCX_SLICE_DFL * priority_slice_multiplier, SCX_ENQ_HEAD);
+        __sync_fetch_and_add(&nr_priority_local_sum, 1);
+        return;
+    /* Non-priority tasks go to local DSQ, too. */
+    }else{
+    	scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL, SCX_SLICE_DFL, 0);
+    }
+
+}
+
+void BPF_STRUCT_OPS(priority_cpuselection_dispatch, s32 cpu, struct task_struct *prev)
+{
+    struct task_struct *p;
+    u32 moved = 0;
+    /* scan NONPRI_DSQ and move a task to SHARED_DSQ */
+    bpf_for_each(scx_dsq, p, NONPRI_DSQ, 0) {
+	__COMPAT_scx_bpf_dsq_move(BPF_FOR_EACH_ITER, p, SHARED_DSQ, 0);
+        __sync_fetch_and_sub(&nr_nonpriority_custom, 1);
+        __sync_fetch_and_add(&nr_dispatched_global_sum, 1);
+        moved++;
+        if ((max_dispatch > 0) && (moved >= max_dispatch)) {
+            break;
+        }
+    }
+
+
+    /* Consume from global DSQ */
+    scx_bpf_dsq_move_to_local(SHARED_DSQ);
+}
+
+s32 BPF_STRUCT_OPS_SLEEPABLE(priority_cpuselection_init)
+{
+    scx_bpf_create_dsq(SHARED_DSQ, -1);
+    return scx_bpf_create_dsq(NONPRI_DSQ, -1);
+}
+
+void BPF_STRUCT_OPS(priority_cpuselection_exit, struct scx_exit_info *ei)
+{
+    UEI_RECORD(uei, ei);
+}
+
+SCX_OPS_DEFINE(priority_cpuselection_ops,
+            .select_cpu		= (void *)priority_cpuselection_select_cpu,
+            .enqueue		= (void *)priority_cpuselection_enqueue,
+            .dispatch		= (void *)priority_cpuselection_dispatch,
+            .init			= (void *)priority_cpuselection_init,
+            .exit			= (void *)priority_cpuselection_exit,
+            .name			= "priority_cpuselection");

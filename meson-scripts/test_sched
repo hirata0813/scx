@@ -33,6 +33,8 @@ if [ $# -ge 2 ] ; then
 else
     #SCHEDS["scx_ctrl"]="-v"
     SCHEDS["scx_priority"]="-v"
+    SCHEDS["scx_supersimple"]="-v"
+    SCHEDS["scx_priority_cpuselection"]="-v"
     #SCHEDS["scx_simple"]="-v"
     #SCHEDS["myscx_simple"]="-v"
     #SCHEDS["scx_central"]="-v"
