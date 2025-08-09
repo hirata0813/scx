@@ -12,6 +12,7 @@ INFINITYLOOP="./infinityloop"
 
 PRIORITY_SCHED="scx_priority"
 SIMPLE_SCHED="scx_supersimple"
+PRIORITY_CPUSELECTION_SCHED="scx_priority_cpuselection"
 
 # 出力ファイル名の動的生成
 OUTPUT_FILE1="priority-task-result.csv"
@@ -93,6 +94,31 @@ check_scheduler_priotask_cpu_owned() {
     echo "scx_priority is running. Proceeding with benchmark..."
 }
 
+check_scheduler_different_cpu_selection() {
+    local ts_multi=$1
+    local num_dispatch=$2
+    if ! pgrep -f "scx_priority_cpuselection" > /dev/null; then
+      echo "Starting priority scheduler..."
+      sudo $PRIORITY_CPUSELECTION_SCHED $ts_multi $num_dispatch &
+  
+      # スケジューラが起動するまで待つ
+      sleep 2
+  
+    fi
+
+    echo "scx_priority is running. Proceeding with benchmark..."
+}
+
+stop_simple_scheduler() {
+    if pgrep -f "scx_supersimple" > /dev/null; then
+        echo "Stopping supersimple scheduler..."
+        sudo pkill -f "scx_supersimple"
+        sleep 2
+    else
+        echo "scx_supersimple is not running."
+    fi
+}
+
 stop_scheduler() {
     if pgrep -f "scx_priority" > /dev/null; then
         echo "Stopping priority scheduler..."
@@ -100,6 +126,16 @@ stop_scheduler() {
         sleep 2
     else
         echo "scx_priority is not running."
+    fi
+}
+
+stop_cpuselection_scheduler() {
+    if pgrep -f "scx_priority_cpuselection" > /dev/null; then
+        echo "Stopping cpuselection scheduler..."
+        sudo pkill -f "scx_priority_cpuselection"
+        sleep 2
+    else
+        echo "scx_priority_cpuselection is not running."
     fi
 }
 
@@ -202,7 +238,7 @@ main() {
             done
 
             # スケジューラの停止
-            stop_scheduler
+ 	    stop_simple_scheduler
         done
     done
 
@@ -358,7 +394,7 @@ main() {
     	for slice_mult in "${slice_multipliers[@]}"; do
             echo ""
             echo "--- Testing with slice multiplier: ${slice_mult} ---"
-            check_scheduler $slice_mult $dispatch_limit
+ 	    check_scheduler_different_cpu_selection $slice_mult $dispatch_limit
     
             # infinity_loop の数を変えながらについて測定
             for infinity_count in "${infinity_counts[@]}"; do
@@ -378,7 +414,7 @@ main() {
             done
 
             # スケジューラの停止
-            stop_scheduler
+ 	    stop_cpuselection_scheduler
         done
     done
 
