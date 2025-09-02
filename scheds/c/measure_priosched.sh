@@ -6,8 +6,8 @@
 # 設定
 PRIORITY_TASK="./priority-task"
 NONPRIORITY_TASK="./nonpriority-task"
-ITERATIONS=10
-MAX_NONPRIORITY_TASKS=10
+ITERATIONS=1
+MAX_NONPRIORITY_TASKS=30
 INFINITYLOOP="./infinityloop"
 
 PRIORITY_SCHED="scx_priority"
@@ -140,6 +140,59 @@ stop_cpuselection_scheduler() {
 }
 
 # メイン測定ループ
+run_benchmark_formeasure1() {
+    local slice_mult=$1
+    local dispatch_limit=$2
+    local infinity_count=$3
+    local nonpriority_count=$4
+    local iteration=$5
+    
+    echo ""
+    echo "Running iteration $iteration with $nonpriority_count non-priority tasks"
+    echo "Parameters: slice_mult=$slice_mult, dispatch_limit=$dispatch_limit, infinity_count=$infinity_count"
+    
+    declare -a pids
+    declare -a infinityloop_pids
+
+    # infinity loop tasks開始（CPUバウンドなバックグラウンドタスク）
+    for ((i=1; i<=infinity_count; i++)); do
+        echo "Starting infinity loop task $i..."
+        $INFINITYLOOP &
+        infinity_pid=$!
+        infinityloop_pids+=($infinity_pid)
+    done
+    
+    # non-priority tasks開始
+    for ((i=1; i<=nonpriority_count; i++)); do
+        echo "Starting non-priority task $i..."
+        sudo $NONPRIORITY_TASK $slice_mult $dispatch_limit $infinity_count $nonpriority_count $iteration &
+        nonpriority_pid=$!
+        pids+=($nonpriority_pid)
+    done
+
+    # 全てのタスクの完了を待つ
+    echo "Waiting for all tasks to complete..."
+    for pid in "${pids[@]}"; do
+        wait $pid 2>/dev/null
+    done
+    
+    echo "All tasks completed for iteration $iteration with $nonpriority_count non-priority tasks"
+
+
+    # infinity loopタスクを強制終了
+    echo "Terminating remaining infinity loop tasks..."
+    for infinityloop_pid in "${infinityloop_pids[@]}"; do
+        if kill -0 "$infinityloop_pid" 2>/dev/null; then
+            echo "Killing remaining task (PID: $infinityloop_pid)"
+            kill -TERM "$infinityloop_pid" 2>/dev/null
+        fi
+    done
+    
+    # クリーンアップ
+    sleep 20
+}
+
+# メイン測定ループ
 run_benchmark() {
     local slice_mult=$1
     local dispatch_limit=$2
@@ -195,7 +248,7 @@ run_benchmark() {
     done
     
     # クリーンアップ
-    sleep 60
+    sleep 20
 }
 
 # メイン実行
@@ -207,50 +260,94 @@ main() {
     dispatch_limits=(1)         # ディスパッチ制限数（-1は無制限）
     infinity_counts=(0)           # infinity_loopの数
 
-    # 計測1(CFS と単純なコールバックを実装したSCX との比較)
-    for dispatch_limit in "${dispatch_limits[@]}"; do
-        echo ""
-        echo "=============================================="
-        echo "Measure 1: CFS versus scx_supersimple"
-        echo "=============================================="
-
-    	# タイムスライスの差を変えて測定
-    	for slice_mult in "${slice_multipliers[@]}"; do
-            echo ""
-            echo "--- Testing with slice multiplier: ${slice_mult} ---"
-            check_simple_scheduler $slice_mult $dispatch_limit
-    
-            # infinity_loop の数を変えながらについて測定
-            for infinity_count in "${infinity_counts[@]}"; do
-                echo ""
-                echo "Testing with ${infinity_count} infinity loops"
-
-                # 各nonpriority task数(1~10)について測定
-        	for ((iteration=1; iteration<=ITERATIONS; iteration++)); do
-
-                    # 各イテレーション(1~10)について測定
-        	    for ((nonpriority_count=1; nonpriority_count<=MAX_NONPRIORITY_TASKS; nonpriority_count++)); do
-                    	echo ""
-                    	echo "=== Testing with $nonpriority_count non-priority tasks ==="
-                        run_benchmark $slice_mult $dispatch_limit $infinity_count $nonpriority_count $iteration
-                    done
-                done
-            done
-
-            # スケジューラの停止
- 	    stop_simple_scheduler
-        done
-    done
-
-    # 計測1: ログファイルのコピーを取る
-
-    mkdir -p "/home/hirata/logs/simple_scx"
-    cp "$OUTPUT_FILE1" "/home/hirata/logs/simple_scx/$OUTPUT_FILE1"
-    cp "$OUTPUT_FILE2" "/home/hirata/logs/simple_scx/$OUTPUT_FILE2"
-
-    echo "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,prio_elapsed_time,voluntary_cts,nonvoluntary_cts" > "$OUTPUT_FILE1"
-    echo "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,nonprio_elapsed_time,voluntary_cts,nonvoluntary_cts" > "$OUTPUT_FILE2"
-
+#    # 計測1(CFS と単純なコールバックを実装したSCX との比較)
+#    for dispatch_limit in "${dispatch_limits[@]}"; do
+#        echo ""
+#        echo "=============================================="
+#        echo "Measure 1: CFS versus scx_supersimple"
+#        echo "=============================================="
+#
+#    	# タイムスライスの差を変えて測定
+#    	for slice_mult in "${slice_multipliers[@]}"; do
+#            echo ""
+#            echo "--- Testing with slice multiplier: ${slice_mult} ---"
+#            check_simple_scheduler $slice_mult $dispatch_limit
+#    
+#            # infinity_loop の数を変えながらについて測定
+#            for infinity_count in "${infinity_counts[@]}"; do
+#                echo ""
+#                echo "Testing with ${infinity_count} infinity loops"
+#
+#                # 各nonpriority task数(1~10)について測定
+#        	for ((iteration=1; iteration<=ITERATIONS; iteration++)); do
+#
+#                    # 各イテレーション(1~10)について測定
+#        	    for ((nonpriority_count=1; nonpriority_count<=MAX_NONPRIORITY_TASKS; nonpriority_count++)); do
+#                    	echo ""
+#                    	echo "=== Testing with $nonpriority_count non-priority tasks ==="
+#                        run_benchmark_formeasure1 $slice_mult $dispatch_limit $infinity_count $nonpriority_count $iteration
+#                    done
+#                done
+#            done
+#
+#            # スケジューラの停止
+# 	    stop_simple_scheduler
+#        done
+#    done
+#
+#    # 計測1: ログファイルのコピーを取る
+#
+#    mkdir -p "/home/hirata/logs/cfs-versus-scx/simple_scx"
+#    cp "$OUTPUT_FILE1" "/home/hirata/logs/cfs-versus-scx/simple_scx/$OUTPUT_FILE1"
+#    cp "$OUTPUT_FILE2" "/home/hirata/logs/cfs-versus-scx/simple_scx/$OUTPUT_FILE2"
+#    
+#    echo "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,prio_elapsed_time,voluntary_cts,nonvoluntary_cts" > "$OUTPUT_FILE1"
+#    echo "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,nonprio_elapsed_time,voluntary_cts,nonvoluntary_cts" > "$OUTPUT_FILE2"
+#
+#
+#    # 計測2の前準備(計測2以降のデータとの比較．単純なSCXで実行)
+#    for dispatch_limit in "${dispatch_limits[@]}"; do
+#        echo ""
+#        echo "=============================================="
+#        echo "Measure 1: CFS versus scx_supersimple"
+#        echo "=============================================="
+#
+#    	# タイムスライスの差を変えて測定
+#    	for slice_mult in "${slice_multipliers[@]}"; do
+#            echo ""
+#            echo "--- Testing with slice multiplier: ${slice_mult} ---"
+#    
+#            # infinity_loop の数を変えながらについて測定
+#            for infinity_count in "${infinity_counts[@]}"; do
+#                echo ""
+#                echo "Testing with ${infinity_count} infinity loops"
+#
+#                # 各nonpriority task数(1~10)について測定
+#        	for ((iteration=1; iteration<=ITERATIONS; iteration++)); do
+#
+#                    # 各イテレーション(1~10)について測定
+#        	    for ((nonpriority_count=1; nonpriority_count<=MAX_NONPRIORITY_TASKS; nonpriority_count++)); do
+#            		check_simple_scheduler $slice_mult $dispatch_limit
+#                    	echo ""
+#                    	echo "=== Testing with $nonpriority_count non-priority tasks ==="
+#                        run_benchmark $slice_mult $dispatch_limit $infinity_count $nonpriority_count $iteration
+#            		# スケジューラの停止
+# 	    		stop_simple_scheduler
+#                    done
+#                done
+#            done
+#        done
+#    done
+#
+#    # 計測2の前準備: ログファイルのコピーを取る
+#
+#    mkdir -p "/home/hirata/logs/simple_scx"
+#    cp "$OUTPUT_FILE1" "/home/hirata/logs/simple_scx/$OUTPUT_FILE1"
+#    cp "$OUTPUT_FILE2" "/home/hirata/logs/simple_scx/$OUTPUT_FILE2"
+#
+#    echo "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,prio_elapsed_time,voluntary_cts,nonvoluntary_cts" > "$OUTPUT_FILE1"
+#    echo "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,nonprio_elapsed_time,voluntary_cts,nonvoluntary_cts" > "$OUTPUT_FILE2"
+#
     # 計測2(ローカル DSQ のどこに入れるかのみを変えた場合，A群とB群の実行時間はどれほど違うか)
     for dispatch_limit in "${dispatch_limits[@]}"; do
         echo ""
@@ -262,7 +359,6 @@ main() {
     	for slice_mult in "${slice_multipliers[@]}"; do
             echo ""
             echo "--- Testing with slice multiplier: ${slice_mult} ---"
-            check_scheduler $slice_mult $dispatch_limit
     
             # infinity_loop の数を変えながらについて測定
             for infinity_count in "${infinity_counts[@]}"; do
@@ -273,16 +369,16 @@ main() {
         	for ((iteration=1; iteration<=ITERATIONS; iteration++)); do
 
                     # 各イテレーション(1~10)について測定
-        	    for ((nonpriority_count=1; nonpriority_count<=MAX_NONPRIORITY_TASKS; nonpriority_count++)); do
+        	    for ((nonpriority_count=5; nonpriority_count<=MAX_NONPRIORITY_TASKS; nonpriority_count++)); do
+            		check_scheduler $slice_mult $dispatch_limit
                     	echo ""
                     	echo "=== Testing with $nonpriority_count non-priority tasks ==="
                         run_benchmark $slice_mult $dispatch_limit $infinity_count $nonpriority_count $iteration
+            		# スケジューラの停止
+            		stop_scheduler
                     done
                 done
             done
-
-            # スケジューラの停止
-            stop_scheduler
         done
     done
 
@@ -291,139 +387,138 @@ main() {
     mkdir -p "/home/hirata/logs/only_queueing"
     cp "$OUTPUT_FILE1" "/home/hirata/logs/only_queueing/$OUTPUT_FILE1"
     cp "$OUTPUT_FILE2" "/home/hirata/logs/only_queueing/$OUTPUT_FILE2"
-
-    echo "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,prio_elapsed_time,voluntary_cts,nonvoluntary_cts" > "$OUTPUT_FILE1"
-    echo "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,nonprio_elapsed_time,voluntary_cts,nonvoluntary_cts" > "$OUTPUT_FILE2"
-
-    # 計測3(計測2+A群の CPU を固定した場合，A群とB群の実行時間はどれほど違うか)
-    for dispatch_limit in "${dispatch_limits[@]}"; do
-        echo ""
-        echo "=============================================="
-        echo "Measure 3: Measure 2 & cpu_fix"
-        echo "=============================================="
-
-    	# タイムスライスの差を変えて測定
-    	for slice_mult in "${slice_multipliers[@]}"; do
-            echo ""
-            echo "--- Testing with slice multiplier: ${slice_mult} ---"
-            check_scheduler_priotask_cpu_fixed $slice_mult $dispatch_limit
-    
-            # infinity_loop の数を変えながらについて測定
-            for infinity_count in "${infinity_counts[@]}"; do
-                echo ""
-                echo "Testing with ${infinity_count} infinity loops"
-
-                # 各nonpriority task数(1~10)について測定
-        	for ((iteration=1; iteration<=ITERATIONS; iteration++)); do
-
-                    # 各イテレーション(1~10)について測定
-        	    for ((nonpriority_count=1; nonpriority_count<=MAX_NONPRIORITY_TASKS; nonpriority_count++)); do
-                    	echo ""
-                    	echo "=== Testing with $nonpriority_count non-priority tasks ==="
-                        run_benchmark $slice_mult $dispatch_limit $infinity_count $nonpriority_count $iteration
-                    done
-                done
-            done
-
-            # スケジューラの停止
-            stop_scheduler
-        done
-    done
-
-    # 計測3: ログファイルのコピーを取る
-
-    mkdir -p "/home/hirata/logs/queueing_and_cpufix"
-    cp "$OUTPUT_FILE1" "/home/hirata/logs/queueing_and_cpufix/$OUTPUT_FILE1"
-    cp "$OUTPUT_FILE2" "/home/hirata/logs/queueing_and_cpufix/$OUTPUT_FILE2"
-
-    echo "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,prio_elapsed_time,voluntary_cts,nonvoluntary_cts" > "$OUTPUT_FILE1"
-    echo "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,nonprio_elapsed_time,voluntary_cts,nonvoluntary_cts" > "$OUTPUT_FILE2"
-
-    # 計測4(計測2+A群がCPUを占有した場合，A群とB群の実行時間はどれほど違うか)
-    for dispatch_limit in "${dispatch_limits[@]}"; do
-        echo ""
-        echo "=============================================="
-        echo "Measure 4: Measure 2 + cpu own"
-        echo "=============================================="
-
-    	# タイムスライスの差を変えて測定
-    	for slice_mult in "${slice_multipliers[@]}"; do
-            echo ""
-            echo "--- Testing with slice multiplier: ${slice_mult} ---"
-            check_scheduler_priotask_cpu_owned $slice_mult $dispatch_limit
-    
-            # infinity_loop の数を変えながらについて測定
-            for infinity_count in "${infinity_counts[@]}"; do
-                echo ""
-                echo "Testing with ${infinity_count} infinity loops"
-
-                # 各nonpriority task数(1~10)について測定
-        	for ((iteration=1; iteration<=30; iteration++)); do
-
-                    # 各イテレーション(1~10)について測定
-        	    for ((nonpriority_count=1; nonpriority_count<=MAX_NONPRIORITY_TASKS; nonpriority_count++)); do
-                    	echo ""
-                    	echo "=== Testing with $nonpriority_count non-priority tasks ==="
-                        run_benchmark $slice_mult $dispatch_limit $infinity_count $nonpriority_count $iteration
-                    done
-                done
-            done
-
-            # スケジューラの停止
-            stop_scheduler
-        done
-    done
-
-    # 計測4: ログファイルのコピーを取る
-
-    mkdir -p "/home/hirata/logs/queueing_and_cpuown"
-    cp "$OUTPUT_FILE1" "/home/hirata/logs/queueing_and_cpuown/$OUTPUT_FILE1"
-    cp "$OUTPUT_FILE2" "/home/hirata/logs/queueing_and_cpuown/$OUTPUT_FILE2"
-
-    echo "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,prio_elapsed_time,voluntary_cts,nonvoluntary_cts" > "$OUTPUT_FILE1"
-    echo "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,nonprio_elapsed_time,voluntary_cts,nonvoluntary_cts" > "$OUTPUT_FILE2"
-
-    # 計測5(計測2+A群，B群それぞれで実行CPUの選び方を変えた場合，A群とB群の実行時間はどれほど違うか)
-    for dispatch_limit in "${dispatch_limits[@]}"; do
-        echo ""
-        echo "=============================================="
-        echo "Measure 5: Measure 2 + different cpu selection"
-        echo "=============================================="
-
-    	# タイムスライスの差を変えて測定
-    	for slice_mult in "${slice_multipliers[@]}"; do
-            echo ""
-            echo "--- Testing with slice multiplier: ${slice_mult} ---"
- 	    check_scheduler_different_cpu_selection $slice_mult $dispatch_limit
-    
-            # infinity_loop の数を変えながらについて測定
-            for infinity_count in "${infinity_counts[@]}"; do
-                echo ""
-                echo "Testing with ${infinity_count} infinity loops"
-
-                # 各nonpriority task数(1~10)について測定
-        	for ((iteration=1; iteration<=ITERATIONS; iteration++)); do
-
-                    # 各イテレーション(1~10)について測定
-        	    for ((nonpriority_count=1; nonpriority_count<=MAX_NONPRIORITY_TASKS; nonpriority_count++)); do
-                    	echo ""
-                    	echo "=== Testing with $nonpriority_count non-priority tasks ==="
-                        run_benchmark $slice_mult $dispatch_limit $infinity_count $nonpriority_count $iteration
-                    done
-                done
-            done
-
-            # スケジューラの停止
- 	    stop_cpuselection_scheduler
-        done
-    done
-
-    # 計測5: ログファイルのコピーを取る
-
-    mkdir -p "/home/hirata/logs/queueing_and_different_cpu_selection"
-    cp "$OUTPUT_FILE1" "/home/hirata/logs/queueing_and_different_cpu_selection/$OUTPUT_FILE1"
-    cp "$OUTPUT_FILE2" "/home/hirata/logs/queueing_and_different_cpu_selection/$OUTPUT_FILE2"
-
+#
+#    echo "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,prio_elapsed_time,voluntary_cts,nonvoluntary_cts" > "$OUTPUT_FILE1"
+#    echo "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,nonprio_elapsed_time,voluntary_cts,nonvoluntary_cts" > "$OUTPUT_FILE2"
+#
+#    # 計測3(計測2+A群の CPU を固定した場合，A群とB群の実行時間はどれほど違うか)
+#    for dispatch_limit in "${dispatch_limits[@]}"; do
+#        echo ""
+#        echo "=============================================="
+#        echo "Measure 3: Measure 2 & cpu_fix"
+#        echo "=============================================="
+#
+#    	# タイムスライスの差を変えて測定
+#    	for slice_mult in "${slice_multipliers[@]}"; do
+#            echo ""
+#            echo "--- Testing with slice multiplier: ${slice_mult} ---"
+#    
+#            # infinity_loop の数を変えながらについて測定
+#            for infinity_count in "${infinity_counts[@]}"; do
+#                echo ""
+#                echo "Testing with ${infinity_count} infinity loops"
+#
+#                # 各nonpriority task数(1~10)について測定
+#        	for ((iteration=1; iteration<=ITERATIONS; iteration++)); do
+#
+#                    # 各イテレーション(1~10)について測定
+#        	    for ((nonpriority_count=1; nonpriority_count<=MAX_NONPRIORITY_TASKS; nonpriority_count++)); do
+#            		check_scheduler_priotask_cpu_fixed $slice_mult $dispatch_limit
+#                    	echo ""
+#                    	echo "=== Testing with $nonpriority_count non-priority tasks ==="
+#                        run_benchmark $slice_mult $dispatch_limit $infinity_count $nonpriority_count $iteration
+#            		# スケジューラの停止
+#            		stop_scheduler
+#                    done
+#                done
+#            done
+#        done
+#    done
+#
+#    # 計測3: ログファイルのコピーを取る
+#
+#    mkdir -p "/home/hirata/logs/queueing_and_cpufix"
+#    cp "$OUTPUT_FILE1" "/home/hirata/logs/queueing_and_cpufix/$OUTPUT_FILE1"
+#    cp "$OUTPUT_FILE2" "/home/hirata/logs/queueing_and_cpufix/$OUTPUT_FILE2"
+#
+#    echo "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,prio_elapsed_time,voluntary_cts,nonvoluntary_cts" > "$OUTPUT_FILE1"
+#    echo "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,nonprio_elapsed_time,voluntary_cts,nonvoluntary_cts" > "$OUTPUT_FILE2"
+#
+#    # 計測4(計測2+A群がCPUを占有した場合，A群とB群の実行時間はどれほど違うか)
+#    for dispatch_limit in "${dispatch_limits[@]}"; do
+#        echo ""
+#        echo "=============================================="
+#        echo "Measure 4: Measure 2 + cpu own"
+#        echo "=============================================="
+#
+#    	# タイムスライスの差を変えて測定
+#    	for slice_mult in "${slice_multipliers[@]}"; do
+#            echo ""
+#            echo "--- Testing with slice multiplier: ${slice_mult} ---"
+#    
+#            # infinity_loop の数を変えながらについて測定
+#            for infinity_count in "${infinity_counts[@]}"; do
+#                echo ""
+#                echo "Testing with ${infinity_count} infinity loops"
+#
+#                # 各nonpriority task数(1~10)について測定
+#        	for ((iteration=1; iteration<=30; iteration++)); do
+#
+#                    # 各イテレーション(1~10)について測定
+#        	    for ((nonpriority_count=1; nonpriority_count<=MAX_NONPRIORITY_TASKS; nonpriority_count++)); do
+#            		check_scheduler_priotask_cpu_owned $slice_mult $dispatch_limit
+#                    	echo ""
+#                    	echo "=== Testing with $nonpriority_count non-priority tasks ==="
+#                        run_benchmark $slice_mult $dispatch_limit $infinity_count $nonpriority_count $iteration
+#            		# スケジューラの停止
+#            		stop_scheduler
+#                    done
+#                done
+#            done
+#
+#        done
+#    done
+#
+#    # 計測4: ログファイルのコピーを取る
+#
+#    mkdir -p "/home/hirata/logs/queueing_and_cpuown"
+#    cp "$OUTPUT_FILE1" "/home/hirata/logs/queueing_and_cpuown/$OUTPUT_FILE1"
+#    cp "$OUTPUT_FILE2" "/home/hirata/logs/queueing_and_cpuown/$OUTPUT_FILE2"
+#
+#    echo "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,prio_elapsed_time,voluntary_cts,nonvoluntary_cts" > "$OUTPUT_FILE1"
+#    echo "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,nonprio_elapsed_time,voluntary_cts,nonvoluntary_cts" > "$OUTPUT_FILE2"
+#
+#    # 計測5(計測2+A群，B群それぞれで実行CPUの選び方を変えた場合，A群とB群の実行時間はどれほど違うか)
+#    for dispatch_limit in "${dispatch_limits[@]}"; do
+#        echo ""
+#        echo "=============================================="
+#        echo "Measure 5: Measure 2 + different cpu selection"
+#        echo "=============================================="
+#
+#    	# タイムスライスの差を変えて測定
+#    	for slice_mult in "${slice_multipliers[@]}"; do
+#            echo ""
+#            echo "--- Testing with slice multiplier: ${slice_mult} ---"
+#    
+#            # infinity_loop の数を変えながらについて測定
+#            for infinity_count in "${infinity_counts[@]}"; do
+#                echo ""
+#                echo "Testing with ${infinity_count} infinity loops"
+#
+#                # 各nonpriority task数(1~10)について測定
+#        	for ((iteration=1; iteration<=ITERATIONS; iteration++)); do
+#
+#                    # 各イテレーション(1~10)について測定
+#        	    for ((nonpriority_count=1; nonpriority_count<=MAX_NONPRIORITY_TASKS; nonpriority_count++)); do
+# 	    		check_scheduler_different_cpu_selection $slice_mult $dispatch_limit
+#                    	echo ""
+#                    	echo "=== Testing with $nonpriority_count non-priority tasks ==="
+#                        run_benchmark $slice_mult $dispatch_limit $infinity_count $nonpriority_count $iteration
+#            		# スケジューラの停止
+# 	    		stop_cpuselection_scheduler
+#                    done
+#                done
+#            done
+#
+#        done
+#    done
+#
+#    # 計測5: ログファイルのコピーを取る
+#
+#    mkdir -p "/home/hirata/logs/queueing_and_different_cpu_selection"
+#    cp "$OUTPUT_FILE1" "/home/hirata/logs/queueing_and_different_cpu_selection/$OUTPUT_FILE1"
+#    cp "$OUTPUT_FILE2" "/home/hirata/logs/queueing_and_different_cpu_selection/$OUTPUT_FILE2"
+#
     echo "Benchmark completed. Results saved to $OUTPUT_FILE1 and $OUTPUT_FILE2"
 }
 

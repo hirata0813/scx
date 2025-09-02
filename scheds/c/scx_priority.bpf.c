@@ -64,26 +64,6 @@ s32 BPF_STRUCT_OPS(priority_select_cpu, struct task_struct *p, s32 prev_cpu, u64
     s32 cpu;
     u64 dummy;
 
-    //if (is_priority_task(p)) {
-    //    /* For priority tasks, try to find idle CPU or use prev_cpu */
-    //    if (is_fixed_prior_task) {
-    //    	cpu = priortask_cpu;
-    //    }else{
-    //    	cpu = scx_bpf_pick_idle_cpu(p->cpus_ptr, 0);
-    //    }
-
-    //    if (cpu >= 0) {
-    //        /* If we found an idle CPU, enqueue directly to local DSQ */
-    //        __sync_fetch_and_add(&nr_priority_local_sum, 1);
-    //    	    scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | cpu, SCX_SLICE_DFL * priority_slice_multiplier, SCX_ENQ_HEAD);
-    //        return cpu;
-
-    //    } else{
-    //        __sync_fetch_and_add(&nr_priority_local_sum, 1);
-    //    	    scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | prev_cpu, SCX_SLICE_DFL * priority_slice_multiplier, SCX_ENQ_HEAD);
-    //        return prev_cpu;
-    //    }
-    //}
 
     /* For non-priority tasks, just return appropriate CPU */
     if (is_priority_task(p) && is_fixed_prior_task){
@@ -98,7 +78,6 @@ s32 BPF_STRUCT_OPS(priority_select_cpu, struct task_struct *p, s32 prev_cpu, u64
 		return cpu;
 	}
     }
-
     return scx_bpf_select_cpu_dfl(p, prev_cpu, wake_flags, &dummy);
 }
 
@@ -123,6 +102,8 @@ static s32 pick_direct_dispatch_cpu(struct task_struct *p, s32 prev_cpu)
 
 void BPF_STRUCT_OPS(priority_enqueue, struct task_struct *p, u64 enq_flags)
 {
+    s32 cpu;
+    u64 dummy;
     /* Priority tasks should not reach enqueue as they are handled in select_cpu */
     //if (is_priority_task(p)) {
     //    /* Fallback: enqueue to local DSQ if somehow reached here */
