@@ -19,29 +19,10 @@
 
 #define LINE_MAX_LEN 256
 
-int get_context_switches(pid_t pid, int *voluntary, int *nonvoluntary) {
-    char path[64];
-    char line[LINE_MAX_LEN];
-    snprintf(path, sizeof(path), "/proc/%d/status", pid);
-
-    FILE *fp = fopen(path, "r");
-    if (!fp) return -1;
-    while (fgets(line, sizeof(line), fp)) {
-        if (sscanf(line, "voluntary_ctxt_switches: %d", voluntary) == 1) {
-            continue;
-        } else if (sscanf(line, "nonvoluntary_ctxt_switches: %d", nonvoluntary) == 1) {
-            continue;
-        }
-    }
-
-    fclose(fp);
-    return 0;
-}
-
 int main(int argc, char *argv[]) {
     volatile int sum = 0;
-    struct timespec start, end;
-    double elapsed;
+    struct timespec start, end, ts25, ts50, ts75;
+    double elapsed, elapsed_25, elapsed_50, elapsed_75;
     int slice_mult = atoi(argv[1]); // 第一引数でタイムスライスにかける数
     int dispatch_limit = atoi(argv[2]); // 第ニ引数で非優先タスクのディスパッチ数
     int infinity_count = atoi(argv[3]); // 第三引数で無限ループの数
@@ -55,7 +36,8 @@ int main(int argc, char *argv[]) {
     int tids_fd = bpf_obj_get("/sys/fs/bpf/priority_tids");
     int flag0 = 0;
     int flag1 = 1;
-    int voluntary = -1, nonvoluntary = -1;
+    long long i=0;
+    printf("priority task start\n");
 
     clock_gettime(CLOCK_MONOTONIC, &start);
 
@@ -66,7 +48,25 @@ int main(int argc, char *argv[]) {
     }
 
 
-    for (long long i=0; i < 50000000000LL; i++){
+    for (; i < 2500000000LL; i++){
+            sum++;
+    }
+    clock_gettime(CLOCK_MONOTONIC, &ts25);
+    printf("priority task 25%\n");
+
+    for (; i < 5000000000LL; i++){
+            sum++;
+    }
+    clock_gettime(CLOCK_MONOTONIC, &ts50);
+    printf("priority task 50%\n");
+
+    for (; i < 7500000000LL; i++){
+            sum++;
+    }
+    clock_gettime(CLOCK_MONOTONIC, &ts75);
+    printf("priority task 75%\n");
+
+    for (; i < 10000000000LL; i++){
             sum++;
     }
 
@@ -78,14 +78,16 @@ int main(int argc, char *argv[]) {
 
 
     clock_gettime(CLOCK_MONOTONIC, &end);
+    elapsed_25 = (ts25.tv_sec - start.tv_sec) +
+                     (ts25.tv_nsec - start.tv_nsec) / 1e9;
+    elapsed_50 = (ts50.tv_sec - start.tv_sec) +
+                     (ts50.tv_nsec - start.tv_nsec) / 1e9;
+    elapsed_75 = (ts75.tv_sec - start.tv_sec) +
+                     (ts75.tv_nsec - start.tv_nsec) / 1e9;
     elapsed = (end.tv_sec - start.tv_sec) +
                      (end.tv_nsec - start.tv_nsec) / 1e9;
 
-    if (get_context_switches(pid, &voluntary, &nonvoluntary) != 0) {
-        fprintf(stderr, "Failed to read context switches for pid %d\n", pid);
-    }
-
-    fprintf(fp, "%d,%d,%d,%d,%d,%.6f,%d,%d\n", slice_mult, dispatch_limit, infinity_count, num_nonprio, iteration, elapsed, voluntary, nonvoluntary);
+    fprintf(fp, "%d,%d,%d,%d,%d,%.6f,%.6f,%.6f,%.6f\n", slice_mult, dispatch_limit, infinity_count, num_nonprio, iteration, elapsed_25, elapsed_50, elapsed_75, elapsed);
 
     fclose(fp);
     return 0;

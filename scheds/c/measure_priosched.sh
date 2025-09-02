@@ -29,8 +29,8 @@ fi
 
 # CSVのヘッダ
 # タイムスライスの差，非優先タスクディスパッチ数，無限ループの数，非優先タスクの数，イテレーション，実行時間 の6つ組データを1行とする
-echo "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,prio_elapsed_time,voluntary_cts,nonvoluntary_cts" > "$OUTPUT_FILE1"
-echo "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,nonprio_elapsed_time,voluntary_cts,nonvoluntary_cts" > "$OUTPUT_FILE2"
+echo "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,elapsed_25,elapsed_50,elapsed_75,prio_elapsed_time" > "$OUTPUT_FILE1"
+echo "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,elapsed_25,elapsed_50,elapsed_75,prio_elapsed_time" > "$OUTPUT_FILE2"
 
 # scx_supersimpleが動いているか確認
 check_simple_scheduler() {
@@ -301,8 +301,8 @@ main() {
 #    cp "$OUTPUT_FILE1" "/home/hirata/logs/cfs-versus-scx/simple_scx/$OUTPUT_FILE1"
 #    cp "$OUTPUT_FILE2" "/home/hirata/logs/cfs-versus-scx/simple_scx/$OUTPUT_FILE2"
 #    
-#    echo "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,prio_elapsed_time,voluntary_cts,nonvoluntary_cts" > "$OUTPUT_FILE1"
-#    echo "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,nonprio_elapsed_time,voluntary_cts,nonvoluntary_cts" > "$OUTPUT_FILE2"
+#    echo "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,elapsed_25,elapsed_50,elapsed_75,prio_elapsed_time" > "$OUTPUT_FILE1"
+#    echo "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,elapsed_25,elapsed_50,elapsed_75,prio_elapsed_time" > "$OUTPUT_FILE2"
 #
 #
 #    # 計測2の前準備(計測2以降のデータとの比較．単純なSCXで実行)
@@ -345,8 +345,8 @@ main() {
 #    cp "$OUTPUT_FILE1" "/home/hirata/logs/simple_scx/$OUTPUT_FILE1"
 #    cp "$OUTPUT_FILE2" "/home/hirata/logs/simple_scx/$OUTPUT_FILE2"
 #
-#    echo "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,prio_elapsed_time,voluntary_cts,nonvoluntary_cts" > "$OUTPUT_FILE1"
-#    echo "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,nonprio_elapsed_time,voluntary_cts,nonvoluntary_cts" > "$OUTPUT_FILE2"
+#    echo "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,elapsed_25,elapsed_50,elapsed_75,prio_elapsed_time" > "$OUTPUT_FILE1"
+#    echo "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,elapsed_25,elapsed_50,elapsed_75,prio_elapsed_time" > "$OUTPUT_FILE2"
 #
     # 計測2(ローカル DSQ のどこに入れるかのみを変えた場合，A群とB群の実行時間はどれほど違うか)
     for dispatch_limit in "${dispatch_limits[@]}"; do
@@ -388,8 +388,8 @@ main() {
     cp "$OUTPUT_FILE1" "/home/hirata/logs/only_queueing/$OUTPUT_FILE1"
     cp "$OUTPUT_FILE2" "/home/hirata/logs/only_queueing/$OUTPUT_FILE2"
 #
-#    echo "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,prio_elapsed_time,voluntary_cts,nonvoluntary_cts" > "$OUTPUT_FILE1"
-#    echo "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,nonprio_elapsed_time,voluntary_cts,nonvoluntary_cts" > "$OUTPUT_FILE2"
+#    echo "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,elapsed_25,elapsed_50,elapsed_75,prio_elapsed_time" > "$OUTPUT_FILE1"
+#    echo "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,elapsed_25,elapsed_50,elapsed_75,prio_elapsed_time" > "$OUTPUT_FILE2"
 #
 #    # 計測3(計測2+A群の CPU を固定した場合，A群とB群の実行時間はどれほど違うか)
 #    for dispatch_limit in "${dispatch_limits[@]}"; do
@@ -431,8 +431,8 @@ main() {
 #    cp "$OUTPUT_FILE1" "/home/hirata/logs/queueing_and_cpufix/$OUTPUT_FILE1"
 #    cp "$OUTPUT_FILE2" "/home/hirata/logs/queueing_and_cpufix/$OUTPUT_FILE2"
 #
-#    echo "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,prio_elapsed_time,voluntary_cts,nonvoluntary_cts" > "$OUTPUT_FILE1"
-#    echo "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,nonprio_elapsed_time,voluntary_cts,nonvoluntary_cts" > "$OUTPUT_FILE2"
+#    echo "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,elapsed_25,elapsed_50,elapsed_75,prio_elapsed_time" > "$OUTPUT_FILE1"
+#    echo "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,elapsed_25,elapsed_50,elapsed_75,prio_elapsed_time" > "$OUTPUT_FILE2"
 #
 #    # 計測4(計測2+A群がCPUを占有した場合，A群とB群の実行時間はどれほど違うか)
 #    for dispatch_limit in "${dispatch_limits[@]}"; do
@@ -475,8 +475,8 @@ main() {
 #    cp "$OUTPUT_FILE1" "/home/hirata/logs/queueing_and_cpuown/$OUTPUT_FILE1"
 #    cp "$OUTPUT_FILE2" "/home/hirata/logs/queueing_and_cpuown/$OUTPUT_FILE2"
 #
-#    echo "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,prio_elapsed_time,voluntary_cts,nonvoluntary_cts" > "$OUTPUT_FILE1"
-#    echo "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,nonprio_elapsed_time,voluntary_cts,nonvoluntary_cts" > "$OUTPUT_FILE2"
+#    echo "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,elapsed_25,elapsed_50,elapsed_75,prio_elapsed_time" > "$OUTPUT_FILE1"
+#    echo "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,elapsed_25,elapsed_50,elapsed_75,prio_elapsed_time" > "$OUTPUT_FILE2"
 #
 #    # 計測5(計測2+A群，B群それぞれで実行CPUの選び方を変えた場合，A群とB群の実行時間はどれほど違うか)
 #    for dispatch_limit in "${dispatch_limits[@]}"; do

@@ -28,8 +28,8 @@ fi
 
 # CSVのヘッダ
 # タイムスライスの差，非優先タスクディスパッチ数，無限ループの数，非優先タスクの数，イテレーション，実行時間 の6つ組データを1行とする
-echo "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,prio_elapsed_time,voluntary_cts,nonvoluntary_cts" > "$OUTPUT_FILE1"
-echo "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,nonprio_elapsed_time,voluntary_cts,nonvoluntary_cts" > "$OUTPUT_FILE2"
+echo "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,elapsed_25,elapsed_50,elapsed_75,prio_elapsed_time" > "$OUTPUT_FILE1"
+echo "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,elapsed_25,elapsed_50,elapsed_75,prio_elapsed_time" > "$OUTPUT_FILE2"
 
 # scx_supersimpleが動いているか確認
 check_simple_scheduler() {
@@ -205,8 +205,8 @@ main() {
     cp "$OUTPUT_FILE1" "/home/hirata/logs/cfs-versus-scx/simple_scx/$OUTPUT_FILE1"
     cp "$OUTPUT_FILE2" "/home/hirata/logs/cfs-versus-scx/simple_scx/$OUTPUT_FILE2"
 
-    echo "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,prio_elapsed_time,voluntary_cts,nonvoluntary_cts" > "$OUTPUT_FILE1"
-    echo "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,nonprio_elapsed_time,voluntary_cts,nonvoluntary_cts" > "$OUTPUT_FILE2"
+    echo "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,elapsed_25,elapsed_50,elapsed_75,prio_elapsed_time" > "$OUTPUT_FILE1"
+    echo "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,elapsed_25,elapsed_50,elapsed_75,prio_elapsed_time" > "$OUTPUT_FILE2"
     
     # 非優先タスクのディスパッチ数を変えながら測定
     for dispatch_limit in "${dispatch_limits[@]}"; do
