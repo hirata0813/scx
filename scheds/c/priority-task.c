@@ -10,6 +10,7 @@
 #include <time.h>
 #include <sys/types.h>
 #include <sys/syscall.h>
+#include <sched.h>
 
 #include <signal.h> // シグナルを処理するためのマクロ定義
 #include <libgen.h> //ファイルパス解析用
@@ -28,7 +29,8 @@ int main(int argc, char *argv[]) {
     int infinity_count = atoi(argv[3]); // 第三引数で無限ループの数
     int num_nonprio = atoi(argv[4]); // 第四引数で非優先度タスクの数
     int iteration = atoi(argv[5]); // 第五引数でイテレーション数
-    FILE *fp = fopen("priority-task-result.csv","a");;
+    int task_num = atoi(argv[6]); // 第六引数でタスク番号
+    FILE *fp = fopen("priority-task-result.csv","a");
 
     int pid = getpid();
     int tid = syscall(SYS_gettid);
@@ -37,7 +39,7 @@ int main(int argc, char *argv[]) {
     int flag0 = 0;
     int flag1 = 1;
     long long i=0;
-    printf("priority task start\n");
+    //printf("priority task start\n");
 
     clock_gettime(CLOCK_MONOTONIC, &start);
 
@@ -52,19 +54,27 @@ int main(int argc, char *argv[]) {
             sum++;
     }
     clock_gettime(CLOCK_MONOTONIC, &ts25);
-    printf("priority task 25%\n");
+    //printf("priority task 25%\n");
+    //sched_yield();
+    //printf("yield finish\n");
 
     for (; i < 5000000000LL; i++){
             sum++;
     }
     clock_gettime(CLOCK_MONOTONIC, &ts50);
-    printf("priority task 50%\n");
+    //printf("priority task 50%\n");
+    //sched_yield();
+    //printf("yield finish\n");
 
     for (; i < 7500000000LL; i++){
             sum++;
     }
     clock_gettime(CLOCK_MONOTONIC, &ts75);
-    printf("priority task 75%\n");
+    //printf("priority task 75%\n");
+    //sched_yield();
+    //printf("yield finish\n");
+    //sched_yield();
+    //printf("yield finish\n");
 
     for (; i < 10000000000LL; i++){
             sum++;
@@ -86,8 +96,7 @@ int main(int argc, char *argv[]) {
                      (ts75.tv_nsec - start.tv_nsec) / 1e9;
     elapsed = (end.tv_sec - start.tv_sec) +
                      (end.tv_nsec - start.tv_nsec) / 1e9;
-
-    fprintf(fp, "%d,%d,%d,%d,%d,%.6f,%.6f,%.6f,%.6f\n", slice_mult, dispatch_limit, infinity_count, num_nonprio, iteration, elapsed_25, elapsed_50, elapsed_75, elapsed);
+    fprintf(fp, "%d,%d,%d,%d,%d,%.6f,%.6f,%.6f,%.6f,%d,%d\n", slice_mult, dispatch_limit, infinity_count, num_nonprio, iteration, elapsed_25, elapsed_50, elapsed_75, elapsed, task_num, pid);
 
     fclose(fp);
     return 0;

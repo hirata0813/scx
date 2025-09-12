@@ -103,7 +103,9 @@ int main(int argc, char **argv)
 		//printf("stats  : local_sum=%ld nr_custom=%ld nr_dispatch=%ld\n",
 		//       skel->bss->nr_priority_local_sum, skel->bss->nr_nonpriority_custom,
 		//       skel->bss->nr_dispatched_global_sum);
-		//fflush(stdout);
+		//printf("nr_select_cpu=%ld\n",
+		//       skel->bss->nr_select_cpu);
+		fflush(stdout);
 		sleep(1);
 	}
 

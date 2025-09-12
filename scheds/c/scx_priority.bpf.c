@@ -40,6 +40,7 @@ struct {
 u64 nr_priority_local_sum = 0;
 u64 nr_nonpriority_custom = 0;
 u64 nr_dispatched_global_sum = 0;
+u64 nr_select_cpu = 0;
 
 UEI_DEFINE(uei);
 
@@ -59,26 +60,55 @@ static bool is_priority_task(struct task_struct *p)
     return ((val1 != NULL && *val1 == 1) && (val2 != NULL && *val2 == 1));
 }
 
+static bool is_nonpriority_task(struct task_struct *p)
+{
+    pid_t pid = p->pid;
+    pid_t tgid = p->tgid;
+    u8 *val1, *val2;
+    
+    /* Check if PID is in priority list */
+    val1 = bpf_map_lookup_elem(&priority_pids, &tgid);
+
+    /* Check if TID is in priority list */
+    val2 = bpf_map_lookup_elem(&priority_tids, &pid);
+
+
+    return ((val1 != NULL && *val1 == 0) && (val2 != NULL && *val2 == 0));
+}
+
 s32 BPF_STRUCT_OPS(priority_select_cpu, struct task_struct *p, s32 prev_cpu, u64 wake_flags)
 {
-    s32 cpu;
+    s32 cpu = 0;
     u64 dummy;
 
+    pid_t pid = p->pid;
+    pid_t tgid = p->tgid;
 
     /* For non-priority tasks, just return appropriate CPU */
-    if (is_priority_task(p) && is_fixed_prior_task){
-    	return priortask_cpu;
-    }
+    //if (is_priority_task(p) && is_fixed_prior_task){
+    //	return priortask_cpu;
+    //}
 
-    if (is_priority_task(p) == false && is_fixed_prior_task && is_owned_prior_task_cpu){
-    	cpu = scx_bpf_select_cpu_dfl(p, prev_cpu, wake_flags, &dummy);
-	if (cpu == 0){
-		return 1;
-	}else{
-		return cpu;
-	}
-    }
-    return scx_bpf_select_cpu_dfl(p, prev_cpu, wake_flags, &dummy);
+    //if (is_priority_task(p) == false && is_fixed_prior_task && is_owned_prior_task_cpu){
+    //	cpu = scx_bpf_select_cpu_dfl(p, prev_cpu, wake_flags, &dummy);
+    //    if (cpu == 0){
+    //    	return 1;
+    //    }else{
+    //    	return cpu;
+    //    }
+    //}
+    cpu = scx_bpf_select_cpu_dfl(p, prev_cpu, wake_flags, &dummy);
+    //cpu = bpf_get_prandom_u32() % 4;
+    //bpf_printk("in select_cpu: PID: %d, TGID: %d, CPU=%d\n", tgid, pid, cpu);
+
+
+    //if (is_priority_task(p)) {
+    //	__sync_fetch_and_add(&nr_select_cpu, 1);
+    //}else{
+    //}
+
+
+    return cpu;
 }
 
 static s32 pick_direct_dispatch_cpu(struct task_struct *p, s32 prev_cpu)
@@ -102,24 +132,28 @@ static s32 pick_direct_dispatch_cpu(struct task_struct *p, s32 prev_cpu)
 
 void BPF_STRUCT_OPS(priority_enqueue, struct task_struct *p, u64 enq_flags)
 {
-    s32 cpu;
+    s32 cpu=scx_bpf_task_cpu(p);
     u64 dummy;
-    /* Priority tasks should not reach enqueue as they are handled in select_cpu */
-    //if (is_priority_task(p)) {
-    //    /* Fallback: enqueue to local DSQ if somehow reached here */
-    //        cpu = pick_direct_dispatch_cpu(p, scx_bpf_task_cpu(p));
-    //        scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | cpu, SCX_SLICE_DFL * priority_slice_multiplier, SCX_ENQ_HEAD);
-    //    __sync_fetch_and_add(&nr_priority_local_sum, 1);
-    //    return;
-    //}
-    /* Non-priority tasks go to local DSQ, too. */
+    pid_t pid = p->pid;
+    pid_t tgid = p->tgid;
+
+    //bpf_printk("in enqueue: PID: %d, TGID: %d, CPU=%d\n", tgid, pid, cpu);
+
     if (is_priority_task(p)) {
+
 	if (is_fixed_prior_task){
     		scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | priortask_cpu, SCX_SLICE_DFL, SCX_ENQ_HEAD);
 		return;
 	}
-    	scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL, SCX_SLICE_DFL, SCX_ENQ_HEAD);
-    }else{
+
+    	/* 常に動作するタスクに対しては，select_cpu()は呼ばれないので，ここで CPU 選択処理を入れる */
+        cpu = pick_direct_dispatch_cpu(p, scx_bpf_task_cpu(p));
+        scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | cpu, SCX_SLICE_DFL * priority_slice_multiplier, SCX_ENQ_HEAD);
+    } else if(is_nonpriority_task(p)){
+    	/* 常に動作するタスクに対しては，select_cpu()は呼ばれないので，ここで CPU 選択処理を入れる */
+        cpu = pick_direct_dispatch_cpu(p, scx_bpf_task_cpu(p));
+        scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | cpu, SCX_SLICE_DFL * priority_slice_multiplier, 0);
+    } else{
     	scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL, SCX_SLICE_DFL, 0);
     }
 
