@@ -126,7 +126,7 @@ static s32 pick_direct_dispatch_cpu(struct task_struct *p, s32 prev_cpu)
 	if (cpu >= 0)
 		return cpu;
 
-	return prev_cpu;
+	return (prev_cpu + 1) % 4;
 }
 
 
