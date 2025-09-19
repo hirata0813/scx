@@ -66,6 +66,7 @@ int main(int argc, char **argv)
 	unlink("/sys/fs/bpf/priority_pids"); // エラー無視でOK
 	unlink("/sys/fs/bpf/priority_tids"); // エラー無視でOK
 	unlink("/sys/fs/bpf/cpu_task_map"); // エラー無視でOK
+	unlink("/sys/fs/bpf/prev_cpu_list"); // エラー無視でOK
 	unlink("/sys/fs/bpf/_data_uei_dump"); // エラー無視でOK
 	unlink("/sys/fs/bpf/priority_ops"); // エラー無視でOK
 	unlink("/sys/fs/bpf/scx_prio_bss"); // エラー無視でOK

@@ -551,7 +551,7 @@ main() {
                 echo "Testing with ${infinity_count} infinity loops"
 
                 # 各イテレーション(1~10)について測定
-        	for ((iteration=1; iteration<=ITERATIONS; iteration++)); do
+        	for ((iteration=8; iteration<=ITERATIONS; iteration++)); do
 
                     # 各nonpriority task数(1~10)について測定
         	    for ((nonpriority_count=1; nonpriority_count<=MAX_NONPRIORITY_TASKS; nonpriority_count++)); do
@@ -569,9 +569,9 @@ main() {
 
     # 計測6: ログファイルのコピーを取る
 
-    mkdir -p "/home/hirata/logs/queueing_and_cpu_selection_in_enqueue"
-    cp "$OUTPUT_FILE1" "/home/hirata/logs/queueing_and_cpu_selection_in_enqueue/$OUTPUT_FILE1"
-    cp "$OUTPUT_FILE2" "/home/hirata/logs/queueing_and_cpu_selection_in_enqueue/$OUTPUT_FILE2"
+    mkdir -p "/home/hirata/logs/queueing_and_cpu_selection_in_enqueue_v3"
+    cp "$OUTPUT_FILE1" "/home/hirata/logs/queueing_and_cpu_selection_in_enqueue_v3/$OUTPUT_FILE1"
+    cp "$OUTPUT_FILE2" "/home/hirata/logs/queueing_and_cpu_selection_in_enqueue_v3/$OUTPUT_FILE2"
 
 
     echo "Benchmark completed. Results saved to $OUTPUT_FILE1 and $OUTPUT_FILE2"
