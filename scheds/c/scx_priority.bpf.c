@@ -223,14 +223,8 @@ void BPF_STRUCT_OPS(priority_enqueue, struct task_struct *p, u64 enq_flags)
 		tmp = bpf_map_lookup_elem(&cpu_task_map, prev);
 	}
 
-
-	if (tmp == NULL){
-		bpf_printk("tmp is NULL!!\n");
-	}
-
 	if (tmp != NULL && *tmp > 0) {
        		__sync_fetch_and_add(tmp, -1);
-		bpf_printk("decremented!!\n");
     	}
 	
 	// CPU を選択
@@ -263,14 +257,8 @@ void BPF_STRUCT_OPS(priority_enqueue, struct task_struct *p, u64 enq_flags)
 		tmp = bpf_map_lookup_elem(&cpu_task_map, prev);
 	}
 
-
-	if (tmp == NULL){
-		bpf_printk("tmp is NULL!!\n");
-	}
-
 	if (tmp != NULL && *tmp > 0) {
        		__sync_fetch_and_add(tmp, -1);
-		bpf_printk("decremented!!\n");
     	}
 
 	
