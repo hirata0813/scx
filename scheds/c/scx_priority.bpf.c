@@ -168,7 +168,7 @@ void BPF_STRUCT_OPS(priority_enqueue, struct task_struct *p, u64 enq_flags)
 {
     s32 current_cpu=scx_bpf_task_cpu(p);
     s32 cpu;
-    s32 i;
+    s32 *val;
     u64 dummy;
     pid_t pid = p->pid;
     pid_t tgid = p->tgid;
@@ -183,18 +183,18 @@ void BPF_STRUCT_OPS(priority_enqueue, struct task_struct *p, u64 enq_flags)
 	}
 
 	// 以前用いていた CPU のタスク数を1減らす
+	
 	// CPU を選択
+        cpu = pick_cpu_based_on_cpumap();
+
 	// cpu_map を更新
+	val = bpf_map_lookup_elem(&cpu_task_map, &cpu);
+	if (val != NULL) {
+       		__sync_fetch_and_add(val, 1);
+    	}
 
-
-        i = pick_cpu_based_on_cpumap();
-	bpf_printk("pick_cpu_based_on_cpumap: %d\n", i);
-        cpu = pick_direct_dispatch_cpu(p, current_cpu);
         scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | cpu, SCX_SLICE_DFL * priority_slice_multiplier, SCX_ENQ_HEAD);
     } else if(is_nonpriority_task(p)){
-        i = pick_cpu_based_on_cpumap();
-	bpf_printk("pick_cpu_based_on_cpumap: %d\n", i);
-        cpu = pick_direct_dispatch_cpu(p, current_cpu);
         scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | cpu, SCX_SLICE_DFL * priority_slice_multiplier, 0);
     } else{
     	scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL, SCX_SLICE_DFL, 0);
