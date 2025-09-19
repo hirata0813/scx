@@ -65,6 +65,7 @@ int main(int argc, char **argv)
 	signal(SIGTERM, sigint_handler);
 	unlink("/sys/fs/bpf/priority_pids"); // エラー無視でOK
 	unlink("/sys/fs/bpf/priority_tids"); // エラー無視でOK
+	unlink("/sys/fs/bpf/cpu_task_map"); // エラー無視でOK
 	unlink("/sys/fs/bpf/_data_uei_dump"); // エラー無視でOK
 	unlink("/sys/fs/bpf/priority_ops"); // エラー無視でOK
 	unlink("/sys/fs/bpf/scx_prio_bss"); // エラー無視でOK

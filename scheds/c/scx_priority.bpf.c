@@ -5,6 +5,8 @@
  */
 #include <scx/common.bpf.h>
 
+#define CPU_NUM 4
+
 enum consts {
     ONE_SEC_IN_NS		= 1000000000,
     SHARED_DSQ		= 0,
@@ -35,6 +37,13 @@ struct {
     __type(key, pid_t);
     __type(value, u8); /* flag: 1 if priority task */
 } priority_tids SEC(".maps");
+
+struct {
+        __uint(type, BPF_MAP_TYPE_ARRAY);
+        __type(key, s32);
+        __type(value, s32);
+        __uint(max_entries, 4);
+} cpu_task_map SEC(".maps");
 
 /* Statistics */
 u64 nr_priority_local_sum = 0;
@@ -111,7 +120,7 @@ s32 BPF_STRUCT_OPS(priority_select_cpu, struct task_struct *p, s32 prev_cpu, u64
     return cpu;
 }
 
-static s32 pick_direct_dispatch_cpu(struct task_struct *p, s32 prev_cpu)
+static s32 pick_direct_dispatch_cpu(struct task_struct *p, s32 current_cpu)
 {
 	s32 cpu;
 
@@ -119,20 +128,47 @@ static s32 pick_direct_dispatch_cpu(struct task_struct *p, s32 prev_cpu)
 		return priortask_cpu;
 
 	if (p->nr_cpus_allowed == 1 ||
-	    scx_bpf_test_and_clear_cpu_idle(prev_cpu))
-		return prev_cpu;
+	    scx_bpf_test_and_clear_cpu_idle(current_cpu))
+		return current_cpu;
 
 	cpu = scx_bpf_pick_idle_cpu(p->cpus_ptr, 0);
 	if (cpu >= 0)
 		return cpu;
 
-	return (prev_cpu + 1) % 4;
+	return (current_cpu + 1) % 4;
+}
+
+
+static s32 pick_cpu_based_on_cpumap()
+{
+	// CPU とタスク数の対応を示した MAP を参照し，一番タスク数が少ない CPU を選ぶ
+	s32 cpu_candidate = 0;
+	s32 cpu_candidate_task_num = 0x7fffffff;
+	s32 cpu = 0;
+
+	bpf_repeat(CPU_NUM) {
+		s32 *cpu_task_num;
+
+		cpu_task_num = bpf_map_lookup_elem(&cpu_task_map, &cpu);
+
+		// cpu_candidate のタスク数と cpu_task_num の大小関係を比較
+		if (cpu_task_num != NULL && *cpu_task_num <= cpu_candidate_task_num) {
+			cpu_candidate = cpu;
+			cpu_candidate_task_num = *cpu_task_num;
+		}
+
+		cpu++;
+	}
+
+	return cpu_candidate;
 }
 
 
 void BPF_STRUCT_OPS(priority_enqueue, struct task_struct *p, u64 enq_flags)
 {
-    s32 cpu=scx_bpf_task_cpu(p);
+    s32 current_cpu=scx_bpf_task_cpu(p);
+    s32 cpu;
+    s32 i;
     u64 dummy;
     pid_t pid = p->pid;
     pid_t tgid = p->tgid;
@@ -146,12 +182,19 @@ void BPF_STRUCT_OPS(priority_enqueue, struct task_struct *p, u64 enq_flags)
 		return;
 	}
 
-    	/* 常に動作するタスクに対しては，select_cpu()は呼ばれないので，ここで CPU 選択処理を入れる */
-        cpu = pick_direct_dispatch_cpu(p, scx_bpf_task_cpu(p));
+	// 以前用いていた CPU のタスク数を1減らす
+	// CPU を選択
+	// cpu_map を更新
+
+
+        i = pick_cpu_based_on_cpumap();
+	bpf_printk("pick_cpu_based_on_cpumap: %d\n", i);
+        cpu = pick_direct_dispatch_cpu(p, current_cpu);
         scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | cpu, SCX_SLICE_DFL * priority_slice_multiplier, SCX_ENQ_HEAD);
     } else if(is_nonpriority_task(p)){
-    	/* 常に動作するタスクに対しては，select_cpu()は呼ばれないので，ここで CPU 選択処理を入れる */
-        cpu = pick_direct_dispatch_cpu(p, scx_bpf_task_cpu(p));
+        i = pick_cpu_based_on_cpumap();
+	bpf_printk("pick_cpu_based_on_cpumap: %d\n", i);
+        cpu = pick_direct_dispatch_cpu(p, current_cpu);
         scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | cpu, SCX_SLICE_DFL * priority_slice_multiplier, 0);
     } else{
     	scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL, SCX_SLICE_DFL, 0);
