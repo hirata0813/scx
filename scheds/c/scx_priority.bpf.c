@@ -181,7 +181,7 @@ static s32 pick_cpu_based_on_cpumap()
 
 		cpu++;
 	}
-	bpf_printk("Selected CPU is %d", cpu_candidate);
+	//bpf_printk("Selected CPU is %d", cpu_candidate);
 
 	return cpu_candidate;
 }
