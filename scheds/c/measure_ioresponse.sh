@@ -4,8 +4,8 @@
 # priority-task 1つと nonpriority-task 1~10個を同時実行し、実行時間を計測
 
 # 設定
-PRIORITY_TASK="./priority-task"
-NONPRIORITY_TASK="./nonpriority-task"
+PRIORITY_IOTASK="./io-poll-prio"
+NONPRIORITY_IOTASK="./io-poll-nonprio"
 ITERATIONS=10
 MAX_NONPRIORITY_TASKS=30
 INFINITYLOOP="./infinityloop"
@@ -15,8 +15,8 @@ SIMPLE_SCHED="scx_supersimple"
 PRIORITY_CPUSELECTION_SCHED="scx_priority_cpuselection"
 
 # 出力ファイル名の動的生成
-OUTPUT_FILE1="priority-task-result.csv"
-OUTPUT_FILE2="nonpriority-task-result.csv"
+OUTPUT_FILE1="priority-io-task-result.csv"
+OUTPUT_FILE2="nonpriority-io-task-result.csv"
 
 # 前回のログファイルを削除
 if [ -e ${OUTPUT_FILE1} ]; then
@@ -27,10 +27,6 @@ if [ -e ${OUTPUT_FILE2} ]; then
   sudo rm ${OUTPUT_FILE2}
 fi
 
-# CSVのヘッダ
-# タイムスライスの差，非優先タスクディスパッチ数，無限ループの数，非優先タスクの数，イテレーション，実行時間 の6つ組データを1行とする
-echo "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,elapsed_25,elapsed_50,elapsed_75,prio_elapsed_time,task_num,pid" > "$OUTPUT_FILE1"
-echo "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,elapsed_25,elapsed_50,elapsed_75,nonprio_elapsed_time,task_num,pid" > "$OUTPUT_FILE2"
 
 # scx_priorityが動いているか確認
 check_scheduler() {
@@ -86,6 +82,7 @@ run_benchmark() {
     local infinity_count=$3
     local nonpriority_count=$4
     local iteration=$5
+    local benchmark=$6
     
     echo ""
     echo "Running iteration $iteration with $nonpriority_count non-priority tasks"
@@ -100,24 +97,14 @@ run_benchmark() {
         $INFINITYLOOP &
         infinity_pid=$!
         infinityloop_pids+=($infinity_pid)
+	sleep 0.1
     done
 
     task_num=1
     
-    # non-priority tasks開始
-    for ((i=1; i<=nonpriority_count; i++)); do
-        echo "Starting non-priority task $i..."
-        sudo $NONPRIORITY_TASK $slice_mult $dispatch_limit $infinity_count $nonpriority_count $iteration $task_num &
-        nonpriority_pid=$!
-        pids+=($nonpriority_pid)
-	task_num=$((task_num+1))
-	sleep 0.1 # BPF Map を正しく読み書きするために必要
-    done
-    
-
-    # priority task開始
+    # I/O タスク開始
     echo "Starting priority task..."
-    sudo $PRIORITY_TASK $slice_mult $dispatch_limit $infinity_count $nonpriority_count $iteration $task_num &
+    sudo $benchmark &
     priority_pid=$!
     pids+=($priority_pid)
     task_num=$((task_num+1))
@@ -144,7 +131,7 @@ run_benchmark() {
     done
     
     # クリーンアップ
-    sleep 20
+    sleep 10
 }
 
 # メイン実行
@@ -154,16 +141,48 @@ main() {
     # パラメータ配列の定義
     slice_multipliers=(1)         # タイムスライスの倍率
     dispatch_limits=(1)         # ディスパッチ制限数（-1は無制限）
-    infinity_counts=(0)           # infinity_loopの数
+    infinity_counts=({1..30})           # infinity_loopの数
 
-    echo "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,elapsed_25,elapsed_50,elapsed_75,prio_elapsed_time,task_num,pid" > "$OUTPUT_FILE1"
-    echo "ts_multi,num_dispatch,num_inf,num_nonpriotask,iter,elapsed_25,elapsed_50,elapsed_75,nonprio_elapsed_time,task_num,pid" > "$OUTPUT_FILE2"
+    echo -n > $OUTPUT_FILE1
+    echo -n > $OUTPUT_FILE2
 
-    # 計測6(enqueue()にCPU選択機構を入れる．この方法なら，優先タスクと非優先タスクが綺麗に分かれる)
+    # 計測1(I/Oタスク(優先版))
     for dispatch_limit in "${dispatch_limits[@]}"; do
         echo ""
         echo "=============================================="
-        echo "Measure 6: prior-task: head, nonprior-task: tail, enqueue()にCPU選択機構を入れる"
+	echo "Measure 1: I/O タスク(優先版)"
+        echo "=============================================="
+
+    	# タイムスライスの差を変えて測定
+    	for slice_mult in "${slice_multipliers[@]}"; do
+            echo ""
+            echo "--- Testing with slice multiplier: ${slice_mult} ---"
+    
+            # infinity_loop の数を変えながらについて測定
+            for infinity_count in "${infinity_counts[@]}"; do
+                echo ""
+                echo "Testing with ${infinity_count} infinity loops"
+
+                # 各イテレーション(1~10)について測定
+        	for ((iteration=1; iteration<=1; iteration++)); do
+
+                    # 各nonpriority task数(1~10)について測定
+        	    for ((nonpriority_count=1; nonpriority_count<=1; nonpriority_count++)); do
+            		check_scheduler $slice_mult $dispatch_limit
+                        run_benchmark $slice_mult $dispatch_limit $infinity_count $nonpriority_count $iteration $PRIORITY_IOTASK
+            		# スケジューラの停止
+            		stop_scheduler
+                    done
+                done
+            done
+        done
+    done
+
+    # 計測2(I/Oタスク(優先しない版))
+    for dispatch_limit in "${dispatch_limits[@]}"; do
+        echo ""
+        echo "=============================================="
+	echo "Measure 2: I/O タスク(優先しない版)"
         echo "=============================================="
 
     	# タイムスライスの差を変えて測定
@@ -184,7 +203,7 @@ main() {
             		check_scheduler $slice_mult $dispatch_limit
                     	echo ""
                     	echo "=== Testing with $nonpriority_count non-priority tasks ==="
-                        run_benchmark $slice_mult $dispatch_limit $infinity_count $nonpriority_count $iteration
+                        run_benchmark $slice_mult $dispatch_limit $infinity_count $nonpriority_count $iteration $NONPRIORITY_IOTASK
             		# スケジューラの停止
             		stop_scheduler
                     done
@@ -193,14 +212,6 @@ main() {
         done
     done
 
-    # 計測6: ログファイルのコピーを取る
-
-    #mkdir -p "/home/hirata/logs/queueing_and_cpu_selection_in_enqueue_v5"
-    #cp "$OUTPUT_FILE1" "/home/hirata/logs/queueing_and_cpu_selection_in_enqueue_v5/$OUTPUT_FILE1"
-    #cp "$OUTPUT_FILE2" "/home/hirata/logs/queueing_and_cpu_selection_in_enqueue_v5/$OUTPUT_FILE2"
-
-
-    echo "Benchmark completed. Results saved to $OUTPUT_FILE1 and $OUTPUT_FILE2"
 }
 
 # 実行

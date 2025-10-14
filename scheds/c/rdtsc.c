@@ -11,6 +11,7 @@
 #include <sys/types.h>
 #include <sys/syscall.h>
 #include <sched.h>
+#include <x86intrin.h>
 
 #include <signal.h> // シグナルを処理するためのマクロ定義
 #include <libgen.h> //ファイルパス解析用
@@ -18,19 +19,12 @@
 #include <scx/common.h> // scx 関連．パスはおそらく scx/scheds/include/scx/
 #include "scx_priority.bpf.skel.h" //eBPF スケジューラのスケルトン(BPF コードとのインタフェース)
 
+const unsigned long long CPU_FREQ_HZ = 3500000000UL;
 #define LINE_MAX_LEN 256
 
 int main(int argc, char *argv[]) {
     volatile int sum = 0;
-    struct timespec start, end, ts25, ts50, ts75;
     double elapsed, elapsed_25, elapsed_50, elapsed_75;
-    int slice_mult = atoi(argv[1]); // 第一引数でタイムスライスにかける数
-    int dispatch_limit = atoi(argv[2]); // 第ニ引数で非優先タスクのディスパッチ数
-    int infinity_count = atoi(argv[3]); // 第三引数で無限ループの数
-    int num_nonprio = atoi(argv[4]); // 第四引数で非優先度タスクの数
-    int iteration = atoi(argv[5]); // 第五引数でイテレーション数
-    int task_num = atoi(argv[6]); // 第六引数でタスク番号
-    FILE *fp = fopen("priority-task-result.csv","a");
 
     int pid = getpid();
     int tid = syscall(SYS_gettid);
@@ -39,9 +33,8 @@ int main(int argc, char *argv[]) {
     int flag0 = 0;
     int flag1 = 1;
     long long i=0;
-    //printf("priority task start\n");
+    unsigned long long start, elapse25, elapse50, elapse75, end, v0, v1;
 
-    clock_gettime(CLOCK_MONOTONIC, &start);
 
     // BPF MAP の更新
     if (pids_fd >= 3 && tids_fd >= 3){
@@ -49,11 +42,13 @@ int main(int argc, char *argv[]) {
          bpf_map_update_elem(tids_fd, &tid, &flag1, BPF_ANY);
     }
 
+    start = __rdtsc();
 
     for (; i < 2500000000LL; i++){
             sum++;
     }
-    clock_gettime(CLOCK_MONOTONIC, &ts25);
+
+    elapse25 = __rdtsc();
 
     //ここの間は優先しない
     if (pids_fd >= 3 && tids_fd >= 3){
@@ -64,6 +59,7 @@ int main(int argc, char *argv[]) {
     for (; i < 5000000000LL; i++){
             sum++;
     }
+    elapse50 = __rdtsc();
 
     //ここの間は優先しない
     if (pids_fd >= 3 && tids_fd >= 3){
@@ -71,13 +67,12 @@ int main(int argc, char *argv[]) {
          bpf_map_update_elem(tids_fd, &tid, &flag1, BPF_ANY);
     }
 
-    clock_gettime(CLOCK_MONOTONIC, &ts50);
 
     for (; i < 7500000000LL; i++){
             sum++;
     }
+    elapse75 = __rdtsc();
 
-    clock_gettime(CLOCK_MONOTONIC, &ts75);
 
     //ここの間は優先しない
     if (pids_fd >= 3 && tids_fd >= 3){
@@ -95,19 +90,15 @@ int main(int argc, char *argv[]) {
         bpf_map_update_elem(pids_fd, &pid, &flag0, BPF_ANY);
         bpf_map_update_elem(tids_fd, &tid, &flag0, BPF_ANY);
     }
+    end = __rdtsc();
+
+    v0 = __rdtsc();
+    sleep(1);
+    v1 = __rdtsc();
 
 
-    clock_gettime(CLOCK_MONOTONIC, &end);
-    elapsed_25 = (ts25.tv_sec - start.tv_sec) +
-                     (ts25.tv_nsec - start.tv_nsec) / 1e9;
-    elapsed_50 = (ts50.tv_sec - start.tv_sec) +
-                     (ts50.tv_nsec - start.tv_nsec) / 1e9;
-    elapsed_75 = (ts75.tv_sec - start.tv_sec) +
-                     (ts75.tv_nsec - start.tv_nsec) / 1e9;
-    elapsed = (end.tv_sec - start.tv_sec) +
-                     (end.tv_nsec - start.tv_nsec) / 1e9;
-    fprintf(fp, "%d,%d,%d,%d,%d,%.6f,%.6f,%.6f,%.6f,%d,%d\n", slice_mult, dispatch_limit, infinity_count, num_nonprio, iteration, elapsed_25, elapsed_50, elapsed_75, elapsed, task_num, pid);
+    printf("elapse25=%.6f,elapse50=%.6f,elapse75=%.6f,end=%.6f\n", (elapse25 - start) / (double)CPU_FREQ_HZ, (elapse50 - elapse25) / (double)CPU_FREQ_HZ, (elapse75 - elapse50) / (double)CPU_FREQ_HZ, (end - elapse75) / (double)CPU_FREQ_HZ);
+    printf("1sのスリープ=%.6f\n", (v1 - v0) / (double)CPU_FREQ_HZ);
 
-    fclose(fp);
     return 0;
 }
