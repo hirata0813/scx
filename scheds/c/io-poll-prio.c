@@ -71,7 +71,7 @@ int main() {
 
 
     // ランダムなタイミングでのI/O依頼を100回繰り返す
-    for(int i = 0; i < 3; i++) {
+    for(int i = 0; i < 5; i++) {
 	// ランダムな時間待つ
 	wait = 1.0 + (double)rand() / RAND_MAX * 9.0;	
         printf("Wait=%lf\n", wait);

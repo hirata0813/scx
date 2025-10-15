@@ -14,7 +14,7 @@ PRIORITY_SCHED="scx_priority"
 SIMPLE_SCHED="scx_supersimple"
 PRIORITY_CPUSELECTION_SCHED="scx_priority_cpuselection"
 
-# 出力ファイル名の動的生成
+# 出力ファイル
 OUTPUT_FILE1="priority-io-task-result.csv"
 OUTPUT_FILE2="nonpriority-io-task-result.csv"
 
@@ -86,7 +86,6 @@ run_benchmark() {
     
     echo ""
     echo "Running iteration $iteration with $nonpriority_count non-priority tasks"
-    echo "Parameters: slice_mult=$slice_mult, dispatch_limit=$dispatch_limit, infinity_count=$infinity_count"
     
     declare -a pids
     declare -a infinityloop_pids
@@ -199,7 +198,7 @@ main() {
         	for ((iteration=1; iteration<=1; iteration++)); do
 
                     # 各nonpriority task数(1~10)について測定
-        	    for ((nonpriority_count=15; nonpriority_count<=15; nonpriority_count++)); do
+        	    for ((nonpriority_count=1; nonpriority_count<=30; nonpriority_count++)); do
             		check_scheduler $slice_mult $dispatch_limit
                     	echo ""
                     	echo "=== Testing with $nonpriority_count non-priority tasks ==="
