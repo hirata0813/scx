@@ -103,7 +103,7 @@ run_benchmark() {
     
     # I/O タスク開始
     echo "Starting priority task..."
-    sudo $benchmark &
+    sudo $benchmark $infinity_count &
     priority_pid=$!
     pids+=($priority_pid)
     task_num=$((task_num+1))
@@ -142,8 +142,8 @@ main() {
     dispatch_limits=(1)         # ディスパッチ制限数（-1は無制限）
     infinity_counts=({1..30})           # infinity_loopの数
 
-    echo -n > $OUTPUT_FILE1
-    echo -n > $OUTPUT_FILE2
+    echo "infinity_loop_num, elapsed" > $OUTPUT_FILE1
+    echo "infinity_loop_num, elapsed" > $OUTPUT_FILE2
 
     # 計測1(I/Oタスク(優先版))
     for dispatch_limit in "${dispatch_limits[@]}"; do

@@ -45,7 +45,7 @@ void* io_worker(void* arg) {
 
 
 // ==== メイン処理 ====
-int main() {
+int main(int argc, char *argv[]) {
     unsigned long long io_done, io_res;
     double elapsed, wait;
     int pid = getpid();
@@ -58,6 +58,7 @@ int main() {
     long long i=0;
     volatile int sum = 0;
     int tmp;
+    int num_inf = atoi(argv[1]);
 
     srand(time(NULL));
     printf("Main: doing something first...\n");
@@ -104,7 +105,7 @@ int main() {
 
 	// I/O 完了〜I/O 応答までの経過時間をファイルに出力
     	elapsed = (io_res - io_done) / (double)CPU_FREQ_HZ;
-    	fprintf(fp, "%.9f\n", elapsed);
+    	fprintf(fp, "%d, %.9f\n", num_inf, elapsed);
     	//printf("%.9f\n", elapsed);
     }
 
