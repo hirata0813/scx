@@ -140,7 +140,7 @@ main() {
     # パラメータ配列の定義
     slice_multipliers=(1)         # タイムスライスの倍率
     dispatch_limits=(1)         # ディスパッチ制限数（-1は無制限）
-    infinity_counts=({1..30})           # infinity_loopの数
+    infinity_counts=(0, 1, 10)           # infinity_loopの数
 
     echo "infinity_loop_num, elapsed" > $OUTPUT_FILE1
     echo "infinity_loop_num, elapsed" > $OUTPUT_FILE2
@@ -198,7 +198,7 @@ main() {
         	for ((iteration=1; iteration<=1; iteration++)); do
 
                     # 各nonpriority task数(1~10)について測定
-        	    for ((nonpriority_count=1; nonpriority_count<=30; nonpriority_count++)); do
+        	    for ((nonpriority_count=1; nonpriority_count<=1; nonpriority_count++)); do
             		check_scheduler $slice_mult $dispatch_limit
                     	echo ""
                     	echo "=== Testing with $nonpriority_count non-priority tasks ==="

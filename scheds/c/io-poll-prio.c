@@ -72,10 +72,10 @@ int main(int argc, char *argv[]) {
 
 
     // ランダムなタイミングでのI/O依頼を100回繰り返す
-    for(int i = 0; i < 5; i++) {
+    for(int i = 0; i < 1000; i++) {
 	// ランダムな時間待つ
-	wait = 1.0 + (double)rand() / RAND_MAX * 9.0;	
-        printf("Wait=%lf\n", wait);
+	wait = 1.0 + (double)rand() / RAND_MAX * 4.0;	
+        //printf("Wait=%lf\n", wait);
 	sleep(wait);
 	
 	// 優先フラグの設定
