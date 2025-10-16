@@ -129,8 +129,6 @@ run_benchmark() {
         fi
     done
     
-    # クリーンアップ
-    sleep 10
 }
 
 # メイン実行
@@ -140,7 +138,7 @@ main() {
     # パラメータ配列の定義
     slice_multipliers=(1)         # タイムスライスの倍率
     dispatch_limits=(1)         # ディスパッチ制限数（-1は無制限）
-    infinity_counts=(0, 1, 10)           # infinity_loopの数
+    infinity_counts=(0 1 10)           # infinity_loopの数
 
     echo "infinity_loop_num, elapsed" > $OUTPUT_FILE1
     echo "infinity_loop_num, elapsed" > $OUTPUT_FILE2
