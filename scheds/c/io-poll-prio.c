@@ -72,7 +72,7 @@ int main(int argc, char *argv[]) {
 
 
     // ランダムなタイミングでのI/O依頼を100回繰り返す
-    for(int i = 0; i < 1000; i++) {
+    for(int i = 0; i < 3000; i++) {
 	// ランダムな時間待つ
 	wait = 1.0 + (double)rand() / RAND_MAX * 4.0;	
         //printf("Wait=%lf\n", wait);
@@ -105,7 +105,7 @@ int main(int argc, char *argv[]) {
 
 	// I/O 完了〜I/O 応答までの経過時間をファイルに出力
     	elapsed = (io_res - io_done) / (double)CPU_FREQ_HZ;
-    	fprintf(fp, "%d, %.9f\n", num_inf, elapsed);
+    	fprintf(fp, "%d,%.9f\n", num_inf, elapsed);
     	//printf("%.9f\n", elapsed);
     }
 

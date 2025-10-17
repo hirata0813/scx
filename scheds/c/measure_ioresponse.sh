@@ -99,14 +99,14 @@ run_benchmark() {
 	sleep 0.1
     done
 
-    task_num=1
+    sleep 3
+
     
     # I/O タスク開始
     echo "Starting priority task..."
     sudo $benchmark $infinity_count &
     priority_pid=$!
     pids+=($priority_pid)
-    task_num=$((task_num+1))
 
     # 配列の要素数を取得
     pids_length=${#pids[@]}
@@ -138,10 +138,12 @@ main() {
     # パラメータ配列の定義
     slice_multipliers=(1)         # タイムスライスの倍率
     dispatch_limits=(1)         # ディスパッチ制限数（-1は無制限）
-    infinity_counts=(0 1 10)           # infinity_loopの数
+    infinity_counts=(0 4 10)           # infinity_loopの数
+    joined=$(IFS=-; echo "${infinity_counts[*]}") # 出力ファイルの名前用
 
-    echo "infinity_loop_num, elapsed" > $OUTPUT_FILE1
-    echo "infinity_loop_num, elapsed" > $OUTPUT_FILE2
+
+    echo "infinity_loop_num,elapsed" > $OUTPUT_FILE1
+    echo "infinity_loop_num,elapsed" > $OUTPUT_FILE2
 
     # 計測1(I/Oタスク(優先版))
     for dispatch_limit in "${dispatch_limits[@]}"; do
@@ -174,6 +176,11 @@ main() {
             done
         done
     done
+    
+    timestamp=$(date +%Y%m%d)
+
+    mkdir -p "/home/hirata/logs/io_res/${timestamp}-inf-${joined}"
+    cp "$OUTPUT_FILE1" "/home/hirata/logs/io_res/${timestamp}-inf-${joined}/$OUTPUT_FILE1"
 
     # 計測2(I/Oタスク(優先しない版))
     for dispatch_limit in "${dispatch_limits[@]}"; do
@@ -209,6 +216,8 @@ main() {
         done
     done
 
+    mkdir -p "/home/hirata/logs/io_res/${timestamp}-inf-${joined}"
+    cp "$OUTPUT_FILE2" "/home/hirata/logs/io_res/${timestamp}-inf-${joined}/$OUTPUT_FILE2"
 }
 
 # 実行
