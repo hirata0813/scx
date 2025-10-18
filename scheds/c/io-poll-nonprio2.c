@@ -51,8 +51,7 @@ int main(int argc, char *argv[]) {
     int pids_fd = bpf_obj_get("/sys/fs/bpf/priority_pids");
     int tids_fd = bpf_obj_get("/sys/fs/bpf/priority_tids");
     int flag0 = 0;
-    int flag1 = 1;
-    FILE *fp = fopen("priority-io-task-result2.csv","a");
+    FILE *fp = fopen("nonpriority-io-task-result2.csv","a");
     int tmp;
     int num_inf = atoi(argv[1]);
 
@@ -75,8 +74,8 @@ int main(int argc, char *argv[]) {
 
 	    // 優先フラグの設定
     	if (pids_fd >= 3 && tids_fd >= 3){
-    	     bpf_map_update_elem(pids_fd, &pid, &flag1, BPF_ANY);
-    	     bpf_map_update_elem(tids_fd, &tid, &flag1, BPF_ANY);
+    	     bpf_map_update_elem(pids_fd, &pid, &flag0, BPF_ANY);
+    	     bpf_map_update_elem(tids_fd, &tid, &flag0, BPF_ANY);
     	}
         //printf("ポーリング開始, tmp=%d\n", tmp);
     	// ==== I/O ポーリングフェーズ ====

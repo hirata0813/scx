@@ -17,11 +17,19 @@ rm infinityloop.o
 clang -I/usr/include/bpf -I../../build/scheds/c/scx_priority.p/ -O0 -g -Wall -pthread -c io-poll-prio.c -o io-poll-prio.o
 clang -I/usr/include/bpf -I../../build/scheds/c/scx_priority.p/ -O0 -g -Wall -pthread io-poll-prio.o -o io-poll-prio -lbpf
 
+clang -I/usr/include/bpf -I../../build/scheds/c/scx_priority.p/ -O0 -g -Wall -pthread -c io-poll-prio2.c -o io-poll-prio2.o
+clang -I/usr/include/bpf -I../../build/scheds/c/scx_priority.p/ -O0 -g -Wall -pthread io-poll-prio2.o -o io-poll-prio2 -lbpf
+
 clang -I/usr/include/bpf -I../../build/scheds/c/scx_priority.p/ -O0 -g -Wall -pthread -c io-poll-nonprio.c -o io-poll-nonprio.o
 clang -I/usr/include/bpf -I../../build/scheds/c/scx_priority.p/ -O0 -g -Wall -pthread io-poll-nonprio.o -o io-poll-nonprio -lbpf
 
+clang -I/usr/include/bpf -I../../build/scheds/c/scx_priority.p/ -O0 -g -Wall -pthread -c io-poll-nonprio2.c -o io-poll-nonprio2.o
+clang -I/usr/include/bpf -I../../build/scheds/c/scx_priority.p/ -O0 -g -Wall -pthread io-poll-nonprio2.o -o io-poll-nonprio2 -lbpf
+
 rm io-poll-prio.o
+rm io-poll-prio2.o
 rm io-poll-nonprio.o
+rm io-poll-nonprio2.o
 
 #clang -I/usr/include/bpf -I../../build/scheds/c/scx_priority.p/ -O0 -g -Wall -c lock_test.c -o lock_test.o
 #clang -I/usr/include/bpf -I../../build/scheds/c/scx_priority.p/ -O0 -g -Wall lock_test.o -o lock_test -lbpf
