@@ -177,7 +177,7 @@ main() {
         done
     done
     
-    timestamp=$(date +%Y%m%d)
+    timestamp=$(TZ=Asia/Tokyo date +%Y%m%d-%H%M%S)
 
     mkdir -p "/home/hirata/logs/io_res/${timestamp}-inf-${joined}"
     cp "$OUTPUT_FILE1" "/home/hirata/logs/io_res/${timestamp}-inf-${joined}/$OUTPUT_FILE1"
