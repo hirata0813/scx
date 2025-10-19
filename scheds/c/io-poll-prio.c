@@ -28,13 +28,13 @@ void* io_worker(void* arg) {
     ts.tv_nsec = 500000000;  // 0.3 秒 = 3×10^8 ナノ秒
 			     
     while(true){
-        sleep(1);             // 疑似I/O処理（1秒待つ）
+        sleep(0.1);             // 疑似I/O処理（0.1秒待つ）
         //nanosleep(&ts, NULL);
         //printf("I/O処理スレッドでrdtsc(). io_result=%d\n", io_result);
         //fwrite(buf, 1, sizeof(buf), f);
         //fflush(f);	
-	atomic_fetch_add(&io_result, 1);	// io_result の値をインクリメントすることで，I/O完了
 	atomic_store(&io_done_clock, __rdtsc()); // I/O完了時のクロックを記録
+	atomic_fetch_add(&io_result, 1);	// io_result の値をインクリメントすることで，I/O完了
 
         //printf("I/O 完了: io_done_clock=%llu, io_result=%d\n", io_done_clock, io_result);
     }
@@ -72,9 +72,9 @@ int main(int argc, char *argv[]) {
 
 
     // ランダムなタイミングでのI/O依頼を100回繰り返す
-    for(int i = 0; i < 7000; i++) {
+    for(int i = 0; i < 5000; i++) {
 	// ランダムな時間待つ
-	wait = 1.0 + (double)rand() / RAND_MAX * 4.0;	
+	wait = 0.1 + (double)rand() / RAND_MAX * 0.4;	
         //printf("Wait=%lf\n", wait);
 	sleep(wait);
 	
@@ -108,7 +108,7 @@ int main(int argc, char *argv[]) {
     	fprintf(fp, "%d,%.9f\n", num_inf, elapsed);
     	//printf("%.9f\n", elapsed);
     }
-
+    fclose(fp);
 
     return 0;
 }

@@ -22,15 +22,24 @@ void* io_worker(void *arg) {
     //printf("I/O thread: start processing...\n");
     char buf[1024];
     FILE *f = fopen("/tmp/testfile", "wb");
+    //FILE *fp = fopen("io-task-time.csv", "a");
+    //unsigned long long io_start;
+    //double elapsed;
 			     
     //printf("I/O処理スレッドでrdtsc(). io_result=%d\n", io_result);
     //==== 1KB ファイルに書き込む ====
+    //io_start = __rdtsc();
     fwrite(buf, 1, sizeof(buf), f);
     fflush(f);	
     fsync(fileno(f));
 
+    //usleep(1000);
+
     atomic_fetch_add(&io_result, 1);	// io_result の値をインクリメントすることで，I/O完了
     atomic_store(&io_done_clock, __rdtsc()); // I/O完了時のクロックを記録
+
+    //elapsed = (io_done_clock - io_start) / (double)CPU_FREQ_HZ;
+    //fprintf(fp, "I/O 処理時間=%.9f\n", elapsed);
 
     //printf("I/O 完了: io_done_clock=%llu, io_result=%d\n", io_done_clock, io_result);
     //
@@ -63,14 +72,13 @@ int main(int argc, char *argv[]) {
     printf("Main: issuing I/O request.\n");
 
 
-    for(int i = 0; i < 1000000; i++) {
+    for(int i = 0; i < 10000; i++) {
 	    // 現在のI/O結果を格納
        tmp = atomic_load(&io_result);
 
        // I/O リクエストを発行
        pthread_t threadid;
        pthread_create(&threadid, NULL, io_worker, NULL);
-       pthread_detach(threadid);
 
 
 	    // 優先フラグの設定
@@ -89,6 +97,9 @@ int main(int argc, char *argv[]) {
         //printf("メインスレッドでrdtsc()\n");
     	io_done = atomic_load(&io_done_clock);
         //printf("I/O 検知: io_res=%llu, io_done=%llu, io_result=%llu, tmp=%d\n", io_res, io_done, io_result, tmp);
+	
+	// 念の為，io_workerが終了するまで待機
+        pthread_join(threadid, NULL);
 
 	// 優先フラグを戻す
     	if (pids_fd >= 3 && tids_fd >= 3){
@@ -103,6 +114,7 @@ int main(int argc, char *argv[]) {
 	usleep(100);
     }
 
+    fclose(fp);
 
     return 0;
 }

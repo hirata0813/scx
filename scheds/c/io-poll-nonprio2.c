@@ -62,14 +62,13 @@ int main(int argc, char *argv[]) {
     printf("Main: issuing I/O request.\n");
 
 
-    for(int i = 0; i < 1000000; i++) {
+    for(int i = 0; i < 10000; i++) {
 	    // 現在のI/O結果を格納
        tmp = atomic_load(&io_result);
 
        // I/O リクエストを発行
        pthread_t threadid;
        pthread_create(&threadid, NULL, io_worker, NULL);
-       pthread_detach(threadid);
 
 
 	    // 優先フラグの設定
@@ -88,6 +87,9 @@ int main(int argc, char *argv[]) {
         //printf("メインスレッドでrdtsc()\n");
     	io_done = atomic_load(&io_done_clock);
         //printf("I/O 検知: io_res=%llu, io_done=%llu, io_result=%llu, tmp=%d\n", io_res, io_done, io_result, tmp);
+	
+	// 念の為，io_workerが終了するまで待機
+        pthread_join(threadid, NULL);
 
 	// 優先フラグを戻す
     	if (pids_fd >= 3 && tids_fd >= 3){
@@ -102,6 +104,7 @@ int main(int argc, char *argv[]) {
 	usleep(100);
     }
 
+    fclose(fp);
 
     return 0;
 }

@@ -138,7 +138,7 @@ main() {
     # パラメータ配列の定義
     slice_multipliers=(1)         # タイムスライスの倍率
     dispatch_limits=(1)         # ディスパッチ制限数（-1は無制限）
-    infinity_counts=(0 4 10)           # infinity_loopの数
+    infinity_counts=(1 2 3 5 6 7 8 9)           # infinity_loopの数
     joined=$(IFS=-; echo "${infinity_counts[*]}") # 出力ファイルの名前用
 
 
