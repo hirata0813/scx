@@ -64,6 +64,8 @@ int main(int argc, char *argv[]) {
     FILE *fp = fopen("priority-io-task-result2.csv","a");
     int tmp;
     int num_inf = atoi(argv[1]);
+    int loop = 10000;
+    double *datas = malloc(sizeof(double) * loop);
 
     srand(time(NULL));
     printf("Main: doing something first...\n");
@@ -72,7 +74,7 @@ int main(int argc, char *argv[]) {
     printf("Main: issuing I/O request.\n");
 
 
-    for(int i = 0; i < 10000; i++) {
+    for(int i = 0; i < loop; i++) {
 	    // 現在のI/O結果を格納
        tmp = atomic_load(&io_result);
 
@@ -109,12 +111,17 @@ int main(int argc, char *argv[]) {
 
 	// I/O 完了〜I/O 応答までの経過時間をファイルに出力
     	elapsed = (io_res - io_done) / (double)CPU_FREQ_HZ;
-    	fprintf(fp, "%d,%.9f\n", num_inf, elapsed);
+        datas[i] = elapsed;
     	//printf("%.9f\n", elapsed);
 	usleep(100);
     }
 
+    for (int i = 0; i < loop; i++) {
+        fprintf(fp, "%d,%.9f\n", num_inf, datas[i]);
+    }
+
     fclose(fp);
+    free(datas);
 
     return 0;
 }
