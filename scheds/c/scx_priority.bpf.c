@@ -93,6 +93,21 @@ static bool is_nonpriority_task(struct task_struct *p)
     return ((val1 != NULL && *val1 == 0) && (val2 != NULL && *val2 == 0));
 }
 
+static bool is_cpu_intensive_task(struct task_struct *p)
+{
+    pid_t pid = p->pid;
+    pid_t tgid = p->tgid;
+    u8 *val1, *val2;
+    
+    /* Check if PID is in priority list */
+    val1 = bpf_map_lookup_elem(&priority_pids, &tgid);
+
+    /* Check if TID is in priority list */
+    val2 = bpf_map_lookup_elem(&priority_tids, &pid);
+
+    return ((val1 != NULL && *val1 == 2) && (val2 != NULL && *val2 == 2));
+}
+
 s32 BPF_STRUCT_OPS(priority_select_cpu, struct task_struct *p, s32 prev_cpu, u64 wake_flags)
 {
     s32 cpu = 0;
@@ -199,53 +214,78 @@ void BPF_STRUCT_OPS(priority_enqueue, struct task_struct *p, u64 enq_flags)
 
     if (is_priority_task(p)) {
 
-	if (is_fixed_prior_task){
-    		scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | priortask_cpu, SCX_SLICE_DFL, SCX_ENQ_HEAD);
-		return;
-	}
+	    if (is_fixed_prior_task){
+       		scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | priortask_cpu, SCX_SLICE_DFL, SCX_ENQ_HEAD);
+	    	return;
+	    }
 
-	// assigned_list を確認し，enqueue()により CPU が割り当てられているか確認
-	assigned_cpu = bpf_map_lookup_elem(&assigned_list, &pid);
-	if (assigned_cpu == NULL) {
-		s32 *val;
+	    // assigned_list を確認し，enqueue()により CPU が割り当てられているか確認
+	    assigned_cpu = bpf_map_lookup_elem(&assigned_list, &pid);
+	    if (assigned_cpu == NULL) {
+	    	s32 *val;
 
-		cpu = pick_cpu_based_on_cpumap();
-		// 割り当てられていない場合，pick_cpu_based_on_cpumap により，タスクの CPU 選択 & assigned_list を更新
-		bpf_map_update_elem(&assigned_list, &pid, &cpu, BPF_ANY);	
+	    	//cpu = pick_cpu_based_on_cpumap();
+            cpu = 0;
+	    	// 割り当てられていない場合，pick_cpu_based_on_cpumap により，タスクの CPU 選択 & assigned_list を更新
+	    	bpf_map_update_elem(&assigned_list, &pid, &cpu, BPF_ANY);	
 
-		val = bpf_map_lookup_elem(&cpu_task_map, &cpu);	
-		if (val != NULL){
-			__sync_fetch_and_add(val, 1);
-		}
+	    	val = bpf_map_lookup_elem(&cpu_task_map, &cpu);	
+	    	if (val != NULL){
+	    		__sync_fetch_and_add(val, 1);
+	    	}
 
-		// DSQ に追加
-        	scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | cpu, SCX_SLICE_DFL * priority_slice_multiplier, SCX_ENQ_HEAD);
-    	}else{
-		// 割り当てられている場合，その値を参照する
-        	scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | *assigned_cpu, SCX_SLICE_DFL * priority_slice_multiplier, SCX_ENQ_HEAD);
-	}	
+	    	// DSQ に追加
+           	scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | cpu, SCX_SLICE_DFL * priority_slice_multiplier, SCX_ENQ_HEAD);
+       	}else{
+	    	// 割り当てられている場合，その値を参照する
+           	scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | *assigned_cpu, SCX_SLICE_DFL * priority_slice_multiplier, SCX_ENQ_HEAD);
+	    }	
 	
     } else if(is_nonpriority_task(p)){
-	// assigned_list を確認し，enqueue()により CPU が割り当てられているか確認
-	assigned_cpu = bpf_map_lookup_elem(&assigned_list, &pid);
-	if (assigned_cpu == NULL) {
-		s32 *val;
+	    // assigned_list を確認し，enqueue()により CPU が割り当てられているか確認
+	    assigned_cpu = bpf_map_lookup_elem(&assigned_list, &pid);
+	    if (assigned_cpu == NULL) {
+	    	s32 *val;
 
-		cpu = pick_cpu_based_on_cpumap();
-		// 割り当てられていない場合，pick_cpu_based_on_cpumap により，タスクの CPU 選択 & assigned_list を更新
-		bpf_map_update_elem(&assigned_list, &pid, &cpu, BPF_ANY);	
+	    	//cpu = pick_cpu_based_on_cpumap();
+	    	cpu = 0;
+	    	// 割り当てられていない場合，pick_cpu_based_on_cpumap により，タスクの CPU 選択 & assigned_list を更新
+	    	bpf_map_update_elem(&assigned_list, &pid, &cpu, BPF_ANY);	
 
-		val = bpf_map_lookup_elem(&cpu_task_map, &cpu);	
-		if (val != NULL){
-			__sync_fetch_and_add(val, 1);
-		}
+	    	val = bpf_map_lookup_elem(&cpu_task_map, &cpu);	
+	    	if (val != NULL){
+	    		__sync_fetch_and_add(val, 1);
+	    	}
 
-		// DSQ に追加
-        	scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | cpu, SCX_SLICE_DFL, 0);
-    	}else{
-		// 割り当てられている場合，その値を参照する
-        	scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | *assigned_cpu, SCX_SLICE_DFL, 0);
-	}	
+	    	// DSQ に追加
+           	scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | cpu, SCX_SLICE_DFL, 0);
+       	}else{
+	    	// 割り当てられている場合，その値を参照する
+           	scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | *assigned_cpu, SCX_SLICE_DFL, 0);
+	    }	
+
+    } else if(is_cpu_intensive_task(p)){
+	    // assigned_list を確認し，enqueue()により CPU が割り当てられているか確認
+	    assigned_cpu = bpf_map_lookup_elem(&assigned_list, &pid);
+	    if (assigned_cpu == NULL) {
+	    	s32 *val;
+
+	    	//cpu = pick_cpu_based_on_cpumap();
+	    	cpu = 1;
+	    	// 割り当てられていない場合，pick_cpu_based_on_cpumap により，タスクの CPU 選択 & assigned_list を更新
+	    	bpf_map_update_elem(&assigned_list, &pid, &cpu, BPF_ANY);	
+
+	    	val = bpf_map_lookup_elem(&cpu_task_map, &cpu);	
+	    	if (val != NULL){
+	    		__sync_fetch_and_add(val, 1);
+	    	}
+
+	    	// DSQ に追加
+           	scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | cpu, SCX_SLICE_DFL, 0);
+       	}else{
+	    	// 割り当てられている場合，その値を参照する
+           	scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | *assigned_cpu, SCX_SLICE_DFL, 0);
+	    }	
 
     } else{
     	scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL, SCX_SLICE_DFL, 0);
