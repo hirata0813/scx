@@ -61,51 +61,38 @@ u64 nr_select_cpu = 0;
 
 UEI_DEFINE(uei);
 
+static bool is_nonpriority_task(struct task_struct *p)
+{
+    pid_t pid = p->pid;
+    u8 *val;
+
+    /* Check if TID is in priority list */
+    val = bpf_map_lookup_elem(&priority_tids, &pid);
+
+    return (val != NULL && *val == 0);
+}
+
 /* Check if task is priority task */
 static bool is_priority_task(struct task_struct *p)
 {
     pid_t pid = p->pid;
-    pid_t tgid = p->tgid;
-    u8 *val1, *val2;
-    
-    /* Check if PID is in priority list */
-    val1 = bpf_map_lookup_elem(&priority_pids, &tgid);
+    u8 *val;
 
     /* Check if TID is in priority list */
-    val2 = bpf_map_lookup_elem(&priority_tids, &pid);
+    val = bpf_map_lookup_elem(&priority_tids, &pid);
 
-    return ((val1 != NULL && *val1 == 1) && (val2 != NULL && *val2 == 1));
-}
-
-static bool is_nonpriority_task(struct task_struct *p)
-{
-    pid_t pid = p->pid;
-    pid_t tgid = p->tgid;
-    u8 *val1, *val2;
-    
-    /* Check if PID is in priority list */
-    val1 = bpf_map_lookup_elem(&priority_pids, &tgid);
-
-    /* Check if TID is in priority list */
-    val2 = bpf_map_lookup_elem(&priority_tids, &pid);
-
-
-    return ((val1 != NULL && *val1 == 0) && (val2 != NULL && *val2 == 0));
+    return (val != NULL && *val == 1);
 }
 
 static bool is_cpu_intensive_task(struct task_struct *p)
 {
     pid_t pid = p->pid;
-    pid_t tgid = p->tgid;
-    u8 *val1, *val2;
-    
-    /* Check if PID is in priority list */
-    val1 = bpf_map_lookup_elem(&priority_pids, &tgid);
+    u8 *val;
 
     /* Check if TID is in priority list */
-    val2 = bpf_map_lookup_elem(&priority_tids, &pid);
+    val = bpf_map_lookup_elem(&priority_tids, &pid);
 
-    return ((val1 != NULL && *val1 == 2) && (val2 != NULL && *val2 == 2));
+    return (val != NULL && *val == 2);
 }
 
 s32 BPF_STRUCT_OPS(priority_select_cpu, struct task_struct *p, s32 prev_cpu, u64 wake_flags)
