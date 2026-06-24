@@ -37,7 +37,7 @@
 #include <scx/common.h>
 
 /* BPF スケルトン (bpftool gen skeleton で生成) */
-#include "scx_hybrid.skel.h"
+#include "scx_hybrid.bpf.skel.h"
 
 /* ------------------------------------------------------------------ */
 /* グローバル変数                                                       */
@@ -144,28 +144,14 @@ int main(int argc, char *argv[])
     libbpf_set_strict_mode(LIBBPF_STRICT_ALL);
 
     /* ---- BPF オブジェクトを開く ---- */
-    skel = hybrid_scx_bpf__open();
-    if (!skel) {
-        fprintf(stderr, "Failed to open BPF skeleton\n");
-        return 1;
-    }
+    skel = SCX_OPS_OPEN(hybrid_ops, scx_hybrid);
 
     /* ---- preemption_slice_ns を ro-data セクションで設定 ---- */
     skel->rodata->preemption_slice_ns = preemption_ns;
 
     /* ---- ロード & アタッチ ---- */
-    ret = hybrid_scx_bpf__load(skel);
-    if (ret) {
-        fprintf(stderr, "Failed to load BPF object: %d\n", ret);
-        goto cleanup;
-    }
-
-    link = bpf_map__attach_struct_ops(skel->maps.hybrid_ops);
-    if (!link) {
-        fprintf(stderr, "Failed to attach struct_ops: %d\n", errno);
-        ret = -errno;
-        goto cleanup;
-    }
+    SCX_OPS_LOAD(skel, hybrid_ops, scx_hybrid, uei);
+    link = SCX_OPS_ATTACH(skel, hybrid_ops, scx_hybrid);
 
     printf("Hybrid sched_ext scheduler loaded.\n");
     printf("  preemption_slice_ns = %lu ns (%.3f ms)\n",
@@ -173,7 +159,7 @@ int main(int argc, char *argv[])
     printf("Press Ctrl-C to unload.\n\n");
 
     /* ---- メインループ ---- */
-    while (!g_exit) {
+    while (!g_exit && !UEI_EXITED(skel, uei)) {
         if (stats_interval > 0) {
             sleep((unsigned)stats_interval);
             if (!g_exit)
@@ -189,8 +175,8 @@ int main(int argc, char *argv[])
 
     printf("\nEXIT: Hybrid sched_ext scheduler unregistered.\n");
 
-cleanup:
     bpf_link__destroy(link);
-    hybrid_scx_bpf__destroy(skel);
+    UEI_REPORT(skel, uei);
+	scx_hybrid__destroy(skel);
     return ret < 0 ? -ret : ret;
 }
