@@ -18,7 +18,7 @@ char _license[] SEC("license") = "GPL";
 const volatile u32 priortask_cpu;
 const volatile bool is_fixed_prior_task;
 const volatile bool is_owned_prior_task_cpu;
-const volatile u64 priority_slice_multiplier;
+const volatile u64 time_slice_multiplier;
 const volatile bool suppress_dump;
 const volatile u32 max_dispatch;
 
@@ -95,58 +95,6 @@ static bool is_cpu_intensive_task(struct task_struct *p)
     return (val != NULL && *val == 2);
 }
 
-s32 BPF_STRUCT_OPS(priority_select_cpu, struct task_struct *p, s32 prev_cpu, u64 wake_flags)
-{
-    s32 cpu = 0;
-    u64 dummy;
-
-    pid_t pid = p->pid;
-    pid_t tgid = p->tgid;
-
-    /* For non-priority tasks, just return appropriate CPU */
-    //if (is_priority_task(p) && is_fixed_prior_task){
-    //	return priortask_cpu;
-    //}
-
-    //if (is_priority_task(p) == false && is_fixed_prior_task && is_owned_prior_task_cpu){
-    //	cpu = scx_bpf_select_cpu_dfl(p, prev_cpu, wake_flags, &dummy);
-    //    if (cpu == 0){
-    //    	return 1;
-    //    }else{
-    //    	return cpu;
-    //    }
-    //}
-    cpu = scx_bpf_select_cpu_dfl(p, prev_cpu, wake_flags, &dummy);
-
-
-    //if (is_priority_task(p)) {
-    //	__sync_fetch_and_add(&nr_select_cpu, 1);
-    //}else{
-    //}
-
-
-    return cpu;
-}
-
-static s32 pick_direct_dispatch_cpu(struct task_struct *p, s32 current_cpu)
-{
-	s32 cpu;
-
-	if (is_fixed_prior_task)
-		return priortask_cpu;
-
-	if (p->nr_cpus_allowed == 1 ||
-	    scx_bpf_test_and_clear_cpu_idle(current_cpu))
-		return current_cpu;
-
-	cpu = scx_bpf_pick_idle_cpu(p->cpus_ptr, 0);
-	if (cpu >= 0)
-		return cpu;
-
-	return (current_cpu + 1) % 4;
-}
-
-
 static s32 pick_cpu_based_on_cpumap()
 {
 	// CPU とタスク数の対応を示した MAP を参照し，一番タスク数が少ない CPU を選ぶ
@@ -188,6 +136,52 @@ static s32 pick_cpu_based_on_cpumap()
 	return cpu_candidate;
 }
 
+s32 BPF_STRUCT_OPS(priority_select_cpu, struct task_struct *p, s32 prev_cpu, u64 wake_flags)
+{
+    s32 cpu = 0;
+    u64 dummy;
+    s32 *assigned_cpu;
+
+    pid_t pid = p->pid;
+    pid_t tgid = p->tgid;
+
+    cpu = scx_bpf_select_cpu_dfl(p, prev_cpu, wake_flags, &dummy);
+
+    if (is_priority_task(p)) {
+		// 優先タスクについて select_cpu() が呼び出されたら，プリエンプト
+
+		// CPU 固定タスクの場合，決まったCPUに追加
+	    if (is_fixed_prior_task){
+       		scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | priortask_cpu, SCX_SLICE_DFL, SCX_ENQ_PREEMPT);
+	    	return priortask_cpu;
+	    }
+
+	    // assigned_list を確認し，enqueue()により CPU が割り当てられているか確認
+	    assigned_cpu = bpf_map_lookup_elem(&assigned_list, &pid);
+	    if (assigned_cpu == NULL) {
+	    	s32 *val;
+
+	    	cpu = pick_cpu_based_on_cpumap();
+	    	// 割り当てられていない場合，pick_cpu_based_on_cpumap により，タスクの CPU 選択 & assigned_list を更新
+	    	bpf_map_update_elem(&assigned_list, &pid, &cpu, BPF_ANY);	
+
+	    	val = bpf_map_lookup_elem(&cpu_task_map, &cpu);	
+	    	if (val != NULL){
+	    		__sync_fetch_and_add(val, 1);
+	    	}
+
+	    	// DSQ に追加
+           	scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | cpu, SCX_SLICE_DFL * time_slice_multiplier, SCX_ENQ_PREEMPT);
+       	}else{
+	    	// 割り当てられている場合，その値を参照する
+           	scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | *assigned_cpu, SCX_SLICE_DFL * time_slice_multiplier, SCX_ENQ_PREEMPT);
+	    }	
+    }
+
+    return cpu;
+}
+
+
 void BPF_STRUCT_OPS(priority_enqueue, struct task_struct *p, u64 enq_flags)
 {
     s32 cpu=scx_bpf_task_cpu(p);
@@ -201,8 +195,9 @@ void BPF_STRUCT_OPS(priority_enqueue, struct task_struct *p, u64 enq_flags)
 
     if (is_priority_task(p)) {
 
+		// CPU 固定タスクの場合，決まったCPUに追加
 	    if (is_fixed_prior_task){
-       		scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | priortask_cpu, SCX_SLICE_DFL, SCX_ENQ_HEAD);
+       		scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | priortask_cpu, SCX_SLICE_DFL, SCX_ENQ_PREEMPT);
 	    	return;
 	    }
 
@@ -211,8 +206,8 @@ void BPF_STRUCT_OPS(priority_enqueue, struct task_struct *p, u64 enq_flags)
 	    if (assigned_cpu == NULL) {
 	    	s32 *val;
 
-	    	//cpu = pick_cpu_based_on_cpumap();
-            cpu = 0;
+	    	cpu = pick_cpu_based_on_cpumap();
+            	//cpu = 0; // cpu-bound-cotask-prio.cのような，別スレッドを立てるタスクで利用
 	    	// 割り当てられていない場合，pick_cpu_based_on_cpumap により，タスクの CPU 選択 & assigned_list を更新
 	    	bpf_map_update_elem(&assigned_list, &pid, &cpu, BPF_ANY);	
 
@@ -222,10 +217,10 @@ void BPF_STRUCT_OPS(priority_enqueue, struct task_struct *p, u64 enq_flags)
 	    	}
 
 	    	// DSQ に追加
-           	scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | cpu, SCX_SLICE_DFL * priority_slice_multiplier, SCX_ENQ_HEAD);
+           	scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | cpu, SCX_SLICE_DFL * time_slice_multiplier, SCX_ENQ_PREEMPT);
        	}else{
 	    	// 割り当てられている場合，その値を参照する
-           	scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | *assigned_cpu, SCX_SLICE_DFL * priority_slice_multiplier, SCX_ENQ_HEAD);
+           	scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | *assigned_cpu, SCX_SLICE_DFL * time_slice_multiplier, SCX_ENQ_PREEMPT);
 	    }	
 	
     } else if(is_nonpriority_task(p)){
@@ -234,8 +229,8 @@ void BPF_STRUCT_OPS(priority_enqueue, struct task_struct *p, u64 enq_flags)
 	    if (assigned_cpu == NULL) {
 	    	s32 *val;
 
-	    	//cpu = pick_cpu_based_on_cpumap();
-	    	cpu = 0;
+	    	cpu = pick_cpu_based_on_cpumap();
+            	//cpu = 0; // cpu-bound-cotask-prio.cのような，別スレッドを立てるタスクで利用
 	    	// 割り当てられていない場合，pick_cpu_based_on_cpumap により，タスクの CPU 選択 & assigned_list を更新
 	    	bpf_map_update_elem(&assigned_list, &pid, &cpu, BPF_ANY);	
 
@@ -245,10 +240,10 @@ void BPF_STRUCT_OPS(priority_enqueue, struct task_struct *p, u64 enq_flags)
 	    	}
 
 	    	// DSQ に追加
-           	scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | cpu, SCX_SLICE_DFL, 0);
+           	scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | cpu, SCX_SLICE_DFL * time_slice_multiplier, 0);
        	}else{
 	    	// 割り当てられている場合，その値を参照する
-           	scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | *assigned_cpu, SCX_SLICE_DFL, 0);
+           	scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | *assigned_cpu, SCX_SLICE_DFL * time_slice_multiplier, 0);
 	    }	
 
     } else if(is_cpu_intensive_task(p)){
@@ -257,8 +252,8 @@ void BPF_STRUCT_OPS(priority_enqueue, struct task_struct *p, u64 enq_flags)
 	    if (assigned_cpu == NULL) {
 	    	s32 *val;
 
-	    	//cpu = pick_cpu_based_on_cpumap();
-	    	cpu = 1;
+	    	cpu = pick_cpu_based_on_cpumap();
+            	//cpu = 1; // cpu-bound-cotask-prio.cのような，別スレッドを立てるタスクで利用
 	    	// 割り当てられていない場合，pick_cpu_based_on_cpumap により，タスクの CPU 選択 & assigned_list を更新
 	    	bpf_map_update_elem(&assigned_list, &pid, &cpu, BPF_ANY);	
 

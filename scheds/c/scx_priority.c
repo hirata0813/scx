@@ -76,7 +76,7 @@ int main(int argc, char **argv)
 
 	skel = SCX_OPS_OPEN(priority_ops, scx_priority);
 
-	skel->rodata->priority_slice_multiplier = ts_multi; // タイムスライスに掛ける値を設定
+	skel->rodata->time_slice_multiplier = ts_multi; // タイムスライスに掛ける値を設定
 	skel->rodata->max_dispatch = max_dispatch; // タイムスライスに掛ける値を設定
 	skel->rodata->is_fixed_prior_task = false;
 
