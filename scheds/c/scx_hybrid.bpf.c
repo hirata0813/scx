@@ -1,0 +1,359 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * Hybrid sched_ext Scheduler
+ *
+ * ロジック:
+ *   - タスクが最初にエンキューされたとき、FIFO DSQ (fifo_dsq) に入る。
+ *   - FIFO DSQ 上のタスクは preemption_slice_ns ナノ秒間だけ実行される。
+ *   - タイムスライス内に終了 (quiescent になる) したタスクは再び FIFO に戻る。
+ *   - タイムスライスを使い切った (slice == 0 で stopping) タスクは
+ *     CFS ライクな vtime DSQ (cfs_dsq) に格上げされ、以降は vtime ベースで
+ *     スケジューリングされる。
+ *
+ * ghOSt 実装との対応:
+ *   ghOSt HybridScheduler    →  この BPF スケジューラ
+ *   ShortQueueRq (FIFO)      →  FIFO_DSQ  (カスタム FIFO DSQ)
+ *   CfsRq (vtime)            →  CFS_DSQ   (カスタム vtime DSQ)
+ *   preemption_time_slice_   →  preemption_slice_ns (ロDATA マップ経由で設定可)
+ *   task->new_to_cfs         →  task_ctx->promoted (CFS へ昇格済みフラグ)
+ *
+ * ビルド方法 (scx リポジトリ構成を想定):
+ *   clang -O2 -g -target bpf \
+ *     -I /path/to/linux/tools/include \
+ *     -I /path/to/scx/scheds/include \
+ *     -c hybrid_scx.bpf.c -o hybrid_scx.bpf.o
+ *
+ * ユーザー空間ローダーは hybrid_scx.c を参照。
+ */
+
+#include <scx/common.bpf.h>
+
+char _license[] SEC("license") = "GPL";
+
+/* ------------------------------------------------------------------ */
+/* DSQ IDs                                                              */
+/* ------------------------------------------------------------------ */
+#define FIFO_DSQ  0ULL   /* FIFO  : タイムスライス内に完了するタスク用 */
+#define CFS_DSQ   1ULL   /* vtime : タイムスライスを超えたタスク用     */
+
+/* ------------------------------------------------------------------ */
+/* 設定 (ユーザー空間から BPF_MAP_TYPE_ARRAY で書き換え可能)           */
+/* ------------------------------------------------------------------ */
+/* デフォルトのプリエンプション・タイムスライス: 50 µs (ghOSt デフォルトと同じ) */
+const volatile u64 preemption_slice_ns = 50000ULL;
+
+/* ------------------------------------------------------------------ */
+/* タスクごとのコンテキスト                                             */
+/* ------------------------------------------------------------------ */
+struct task_ctx {
+    /*
+     * promoted == false: まだ FIFO フェーズ
+     * promoted == true : CFS (vtime) フェーズに昇格済み
+     */
+    bool promoted;
+
+    /*
+     * このタスクが FIFO フェーズに入った累積実行時間の基準値。
+     * running() コールバックで記録し、stopping() で経過を計算する。
+     */
+    u64 fifo_start_runtime_ns;
+
+    /* CFS フェーズでの仮想時間 (vtime) */
+    u64 vtime;
+};
+
+struct {
+    __uint(type, BPF_MAP_TYPE_TASK_STORAGE);
+    __uint(map_flags, BPF_F_NO_PREALLOC);
+    __type(key, int);
+    __type(value, struct task_ctx);
+} task_ctx_stor SEC(".maps");
+
+/* ------------------------------------------------------------------ */
+/* 統計 (デバッグ用、per-CPU)                                          */
+/* ------------------------------------------------------------------ */
+struct {
+    __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+    __uint(key_size, sizeof(u32));
+    __uint(value_size, sizeof(u64));
+    __uint(max_entries, 4);
+} stats SEC(".maps");
+
+enum stat_idx {
+    STAT_FIFO_ENQUEUE = 0, /* FIFO DSQ へのエンキュー数 */
+    STAT_CFS_PROMOTE,      /* CFS DSQ への昇格数        */
+    STAT_CFS_ENQUEUE,      /* CFS DSQ へのエンキュー数  */
+    STAT_DIRECT_DISPATCH,  /* select_cpu() での直接ディスパッチ数 */
+};
+
+static __always_inline void stat_inc(enum stat_idx idx)
+{
+    u32 key = (u32)idx;
+    u64 *cnt = bpf_map_lookup_elem(&stats, &key);
+    if (cnt)
+        (*cnt)++;
+}
+
+/* ------------------------------------------------------------------ */
+/* vtime ユーティリティ                                                 */
+/* ------------------------------------------------------------------ */
+
+/*
+ * vtime が前にあるか判定 (符号付き比較でラップアラウンドに対応)。
+ * Linux カーネルの time_before64() と同じ慣用句。
+ */
+static __always_inline bool vtime_before(u64 a, u64 b)
+{
+    return (s64)(a - b) < 0;
+}
+
+/*
+ * CFS_DSQ のグローバル最小 vtime を追跡する変数。
+ * per-CPU でないのは scx_simple と同様のシンプルな単一キュー方式のため。
+ */
+static u64 vtime_now;
+
+/* ------------------------------------------------------------------ */
+/* ops.select_cpu                                                       */
+/* ------------------------------------------------------------------ */
+/*
+ * デフォルト CPU 選択を使い、アイドル CPU が見つかれば即 SCX_DSQ_LOCAL
+ * にディスパッチして enqueue() をスキップする。
+ * ghOSt における ShortQueueSchedule() の CPU 空き確認に相当。
+ */
+s32 BPF_STRUCT_OPS(hybrid_select_cpu, struct task_struct *p,
+                   s32 prev_cpu, u64 wake_flags)
+{
+    bool is_idle = false;
+    s32 cpu;
+
+    cpu = scx_bpf_select_cpu_dfl(p, prev_cpu, wake_flags, &is_idle);
+    if (is_idle) {
+        stat_inc(STAT_DIRECT_DISPATCH);
+        scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL, preemption_slice_ns, 0);
+    }
+    return cpu;
+}
+
+/* ------------------------------------------------------------------ */
+/* ops.enqueue                                                          */
+/* ------------------------------------------------------------------ */
+/*
+ * select_cpu() で直接ディスパッチされなかった場合に呼ばれる。
+ *
+ * - promoted == false → FIFO_DSQ に積む (タイムスライス = preemption_slice_ns)
+ * - promoted == true  → CFS_DSQ  に vtime ベースで積む
+ *
+ * ghOSt:
+ *   TaskNew / TaskRunnable が short_queue_.Enqueue() を呼ぶパスに相当。
+ *   TaskPreempted が時間超過を検出して TaskNewToCfs() を呼ぶパスは
+ *   stopping() コールバック側で行う。
+ */
+void BPF_STRUCT_OPS(hybrid_enqueue, struct task_struct *p, u64 enq_flags)
+{
+    struct task_ctx *tctx;
+
+    tctx = bpf_task_storage_get(&task_ctx_stor, p, 0, 0);
+    if (!tctx) {
+        /* フォールバック: グローバル FIFO DSQ へ */
+        scx_bpf_dsq_insert(p, SCX_DSQ_GLOBAL, preemption_slice_ns, enq_flags);
+        return;
+    }
+
+    if (!tctx->promoted) {
+        /* FIFO フェーズ */
+        stat_inc(STAT_FIFO_ENQUEUE);
+        scx_bpf_dsq_insert(p, FIFO_DSQ, preemption_slice_ns, enq_flags);
+    } else {
+        /* CFS フェーズ: vtime ベース */
+        u64 vtime = tctx->vtime;
+
+        /*
+         * 長時間スリープしていたタスクに過大なクレジットを与えないよう
+         * vtime をグローバル最小値にクランプする (scx_simple と同じ慣用句)。
+         */
+        if (vtime_before(vtime, vtime_now - preemption_slice_ns))
+            vtime = vtime_now - preemption_slice_ns;
+
+        stat_inc(STAT_CFS_ENQUEUE);
+        scx_bpf_dsq_insert_vtime(p, CFS_DSQ, preemption_slice_ns,
+                                  vtime, enq_flags);
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* ops.dispatch                                                         */
+/* ------------------------------------------------------------------ */
+/*
+ * CPU が実行するタスクを探す際に呼ばれる。
+ * FIFO_DSQ → CFS_DSQ の順で消費する。
+ *
+ * ghOSt ShortQueueSchedule() における short_queue_ 優先、
+ * 次に long_cpulist 上の CFS という順序と対応する。
+ */
+void BPF_STRUCT_OPS(hybrid_dispatch, s32 cpu, struct task_struct *prev)
+{
+    /* まず FIFO キューを試みる */
+    if (scx_bpf_dsq_move_to_local(FIFO_DSQ))
+        return;
+
+    /* 次に vtime (CFS) キュー */
+    scx_bpf_dsq_move_to_local(CFS_DSQ);
+}
+
+/* ------------------------------------------------------------------ */
+/* ops.running                                                          */
+/* ------------------------------------------------------------------ */
+/*
+ * タスクが CPU 上で実際に実行を開始した直後に呼ばれる。
+ * FIFO フェーズのタスクについて、このスライスの開始時ランタイムを記録する。
+ *
+ * ghOSt TaskOnCpu() に相当。
+ */
+void BPF_STRUCT_OPS(hybrid_running, struct task_struct *p)
+{
+    struct task_ctx *tctx;
+
+    tctx = bpf_task_storage_get(&task_ctx_stor, p, 0, 0);
+    if (!tctx)
+        return;
+
+    if (!tctx->promoted) {
+        /* FIFO フェーズ: スライス開始時のランタイムを記録 */
+        tctx->fifo_start_runtime_ns = p->se.sum_exec_runtime;
+    } else {
+        /* CFS フェーズ: vtime_now を最新化 */
+        if (vtime_before(vtime_now, tctx->vtime))
+            vtime_now = tctx->vtime;
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* ops.stopping                                                         */
+/* ------------------------------------------------------------------ */
+/*
+ * タスクが CPU を離れる直前 (まだランキュー上にある可能性がある) に呼ばれる。
+ *
+ * ここでタイムスライス超過を判定し、超過していれば CFS フェーズへ昇格させる。
+ *
+ * ghOSt TaskPreempted() 内の
+ *   "if (elapsed_runtime >= preemption_time_slice_) → TaskNewToCfs()"
+ * に相当する。
+ *
+ * @runnable: true であればタスクはまだ実行可能 (スライス切れ等でプリエンプト)
+ */
+void BPF_STRUCT_OPS(hybrid_stopping, struct task_struct *p, bool runnable)
+{
+    struct task_ctx *tctx;
+    u64 elapsed_ns;
+
+    tctx = bpf_task_storage_get(&task_ctx_stor, p, 0, 0);
+    if (!tctx)
+        return;
+
+    if (tctx->promoted) {
+        /*
+         * CFS フェーズ: 実際に消費した CPU 時間を vtime に反映。
+         * nice=0 の場合は vruntime = wall_time なのでそのまま加算。
+         * nice 値対応が必要なら inverse_weight を掛け算する。
+         */
+        u64 used = p->se.sum_exec_runtime - p->scx.dsq_vtime;
+        tctx->vtime += used;
+        /* vtime_now を前に進める */
+        if (vtime_before(vtime_now, tctx->vtime))
+            vtime_now = tctx->vtime;
+        return;
+    }
+
+    /*
+     * FIFO フェーズ: このスライスで実際に使ったランタイムを計算。
+     * p->se.sum_exec_runtime は停止直前の累積値なので差分を取る。
+     */
+    elapsed_ns = p->se.sum_exec_runtime - tctx->fifo_start_runtime_ns;
+
+    /*
+     * タイムスライスを消費しきったか?
+     *   runnable == true かつ elapsed_ns >= preemption_slice_ns
+     *   → カーネルによるプリエンプト (スライス切れ) であるとみなす。
+     *
+     * runnable == false は自発的なブロック (I/O 待ち等) なので FIFO のまま。
+     */
+    if (runnable && elapsed_ns >= preemption_slice_ns) {
+        /* CFS フェーズへ昇格 */
+        tctx->promoted = true;
+        /*
+         * 初回 vtime は現在の vtime_now に設定 (新規タスクと同等に扱う)。
+         * これにより CFS_DSQ の末尾近くに投入される。
+         */
+        tctx->vtime = vtime_now;
+        stat_inc(STAT_CFS_PROMOTE);
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* ops.enable                                                           */
+/* ------------------------------------------------------------------ */
+/*
+ * タスクが sched_ext の制御下に入ったときに呼ばれる。
+ * task_ctx を初期化する。
+ *
+ * ghOSt TaskNew() に相当。
+ */
+void BPF_STRUCT_OPS(hybrid_enable, struct task_struct *p)
+{
+    struct task_ctx *tctx;
+
+    tctx = bpf_task_storage_get(&task_ctx_stor, p, 0,
+                                 BPF_LOCAL_STORAGE_GET_F_CREATE);
+    if (!tctx)
+        return;
+
+    tctx->promoted              = false;
+    tctx->fifo_start_runtime_ns = 0;
+    tctx->vtime                 = vtime_now;
+}
+
+/* ------------------------------------------------------------------ */
+/* ops.init                                                             */
+/* ------------------------------------------------------------------ */
+/*
+ * スケジューラ初期化。DSQ を作成する。
+ */
+s32 BPF_STRUCT_OPS_SLEEPABLE(hybrid_init)
+{
+    int err;
+
+    err = scx_bpf_create_dsq(FIFO_DSQ, -1);
+    if (err)
+        return err;
+
+    err = scx_bpf_create_dsq(CFS_DSQ, -1);
+    if (err)
+        return err;
+
+    return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* ops.exit                                                             */
+/* ------------------------------------------------------------------ */
+void BPF_STRUCT_OPS(hybrid_exit, struct scx_exit_info *ei)
+{
+    UEI_RECORD(uei, ei);
+}
+
+/* ------------------------------------------------------------------ */
+/* struct sched_ext_ops 定義                                            */
+/* ------------------------------------------------------------------ */
+SEC(".struct_ops.link")
+struct sched_ext_ops hybrid_ops = {
+    .select_cpu = (void *)hybrid_select_cpu,
+    .enqueue    = (void *)hybrid_enqueue,
+    .dispatch   = (void *)hybrid_dispatch,
+    .running    = (void *)hybrid_running,
+    .stopping   = (void *)hybrid_stopping,
+    .enable     = (void *)hybrid_enable,
+    .init       = (void *)hybrid_init,
+    .exit       = (void *)hybrid_exit,
+    .name       = "hybrid",
+};
