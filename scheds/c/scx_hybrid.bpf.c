@@ -129,10 +129,10 @@ s32 BPF_STRUCT_OPS(hybrid_select_cpu, struct task_struct *p,
     s32 cpu;
 
     cpu = scx_bpf_select_cpu_dfl(p, prev_cpu, wake_flags, &is_idle);
-    if (is_idle) {
-        stat_inc(STAT_DIRECT_DISPATCH);
-        scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL, preemption_slice_ns, 0);
-    }
+    //if (is_idle) {
+    //    stat_inc(STAT_DIRECT_DISPATCH);
+    //    scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL, preemption_slice_ns, 0);
+    //}
     return cpu;
 }
 
@@ -155,6 +155,10 @@ void BPF_STRUCT_OPS(hybrid_enqueue, struct task_struct *p, u64 enq_flags)
     struct task_ctx *tctx;
 
     tctx = bpf_task_storage_get(&task_ctx_stor, p, 0, 0);
+    //if (tctx) {
+	   // bpf_printk("PID %d: tctx->promoted: %d", p->pid, tctx->promoted);
+    //}
+
     if (!tctx) {
         /* フォールバック: グローバル FIFO DSQ へ */
         scx_bpf_dsq_insert(p, SCX_DSQ_GLOBAL, preemption_slice_ns, enq_flags);
@@ -167,18 +171,21 @@ void BPF_STRUCT_OPS(hybrid_enqueue, struct task_struct *p, u64 enq_flags)
         scx_bpf_dsq_insert(p, FIFO_DSQ, preemption_slice_ns, enq_flags);
     } else {
         /* CFS フェーズ: vtime ベース */
-        u64 vtime = tctx->vtime;
+        u64 vtime = tctx->vtime; // vtime は，タスクがこれまでに，実際に CPU を掴んで実行された累積時間．小さいほど「CPU をあまり使ってないので優先して実行すべき」という意味
+	    bpf_printk("PID %d: tctx->vtime: %d", p->pid, tctx->vtime);
 
         /*
-         * 長時間スリープしていたタスクに過大なクレジットを与えないよう
-         * vtime をグローバル最小値にクランプする (scx_simple と同じ慣用句)。
+         * vtime_now は，システム全体における「現在の仮想時間の基準」(runnning と stopping で更新)
+         * vtime_now は単調増加のみ
+         * vtime_before()により，vtime_now の1スライス以上後ろに取り残されているタスクを判定し，それらの vtime をクランプ
+         * クランプとは，vtime が小さすぎるタスク(例えばずっと I/O 待ちで寝てたやつ)の vtime を引き上げること
+         * このようにして，タスクがキューの中で極端に有利な位置に入るのを防ぐ
          */
         if (vtime_before(vtime, vtime_now - preemption_slice_ns))
             vtime = vtime_now - preemption_slice_ns;
 
         stat_inc(STAT_CFS_ENQUEUE);
-        scx_bpf_dsq_insert_vtime(p, CFS_DSQ, preemption_slice_ns,
-                                  vtime, enq_flags);
+        scx_bpf_dsq_insert_vtime(p, CFS_DSQ, preemption_slice_ns, vtime, enq_flags); // キューイングされたタスクは，vtime の小さい順にソートされる
     }
 }
 
@@ -318,7 +325,7 @@ void BPF_STRUCT_OPS(hybrid_enable, struct task_struct *p)
 /* ops.init                                                             */
 /* ------------------------------------------------------------------ */
 /*
- * スケジューラ初期化。DSQ を作成する。
+ * スケジューラ初期化。カスタム DSQ を作成する。
  */
 s32 BPF_STRUCT_OPS_SLEEPABLE(hybrid_init)
 {
