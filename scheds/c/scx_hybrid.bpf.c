@@ -54,12 +54,20 @@ struct task_ctx {
     bool promoted;
 
     /*
-     * このタスクが FIFO フェーズに入った累積実行時間の基準値。
+     * このタスクが FIFO フェーズに入った際の，CPU 累積実行時間(ns)
      * running() コールバックで記録し、stopping() で経過を計算する。
      */
     u64 fifo_start_runtime_ns;
 
-    /* CFS フェーズでの仮想時間 (vtime) */
+    /*
+     * このタスクが CFS フェーズに入った際の，CPU 累積実行時間(ns)
+     * running() コールバックで記録し、stopping() で経過を計算する。
+     */
+    u64 cfs_start_runtime_ns;
+
+    /* CFS フェーズでの仮想時間 (vtime)
+       vtime は，タスクがこれまでに，実際に CPU を掴んで実行された累積時間．小さいほど「CPU をあまり使ってないので優先して実行すべき」という意味
+    */
     u64 vtime;
 };
 
@@ -178,6 +186,7 @@ void BPF_STRUCT_OPS(hybrid_enqueue, struct task_struct *p, u64 enq_flags)
          * vtime_now は，システム全体における「現在の仮想時間の基準」(runnning と stopping で更新)
          * vtime_now は単調増加のみ
          * vtime_before()により，vtime_now の1スライス以上後ろに取り残されているタスクを判定し，それらの vtime をクランプ
+         * vtime_before(a, b)は，a < b であれば true を返す
          * クランプとは，vtime が小さすぎるタスク(例えばずっと I/O 待ちで寝てたやつ)の vtime を引き上げること
          * このようにして，タスクがキューの中で極端に有利な位置に入るのを防ぐ
          */
@@ -227,10 +236,11 @@ void BPF_STRUCT_OPS(hybrid_running, struct task_struct *p)
         return;
 
     if (!tctx->promoted) {
-        /* FIFO フェーズ: スライス開始時のランタイムを記録 */
-        tctx->fifo_start_runtime_ns = p->se.sum_exec_runtime;
+        /* FIFO フェーズ: スライス開始時の CPU 累積実行時間を記録 */
+        tctx->fifo_start_runtime_ns = p->se.sum_exec_runtime; // sum_exec_runtime メンバは，そのタスクが生まれてから今まで CPU 上で実際に実行された累積時間(ns)
     } else {
-        /* CFS フェーズ: vtime_now を最新化 */
+        /* CFS フェーズ: スライス開始時の CPU 累積実行時間を記録し，vtime_now を最新化 */
+        tctx->cfs_start_runtime_ns = p->se.sum_exec_runtime;
         if (vtime_before(vtime_now, tctx->vtime))
             vtime_now = tctx->vtime;
     }
@@ -240,7 +250,7 @@ void BPF_STRUCT_OPS(hybrid_running, struct task_struct *p)
 /* ops.stopping                                                         */
 /* ------------------------------------------------------------------ */
 /*
- * タスクが CPU を離れる直前 (まだランキュー上にある可能性がある) に呼ばれる。
+ * タスクが CPU を離れる直前 (まだ実行終了していない場合も) に呼ばれる。
  *
  * ここでタイムスライス超過を判定し、超過していれば CFS フェーズへ昇格させる。
  *
@@ -262,10 +272,10 @@ void BPF_STRUCT_OPS(hybrid_stopping, struct task_struct *p, bool runnable)
     if (tctx->promoted) {
         /*
          * CFS フェーズ: 実際に消費した CPU 時間を vtime に反映。
-         * nice=0 の場合は vruntime = wall_time なのでそのまま加算。
          * nice 値対応が必要なら inverse_weight を掛け算する。
          */
-        u64 used = p->se.sum_exec_runtime - p->scx.dsq_vtime;
+        u64 used = p->se.sum_exec_runtime - tctx->cfs_start_runtime_ns; // このときの CFS での実行で，CPU をどの程度掴んで動いたのかを計算
+                                                              // つまり，p->se.sum_exec_runtime から，タスク実行開始時点での CPU 累積実行時間を，引く必要がある
         tctx->vtime += used;
         /* vtime_now を前に進める */
         if (vtime_before(vtime_now, tctx->vtime))
@@ -274,8 +284,8 @@ void BPF_STRUCT_OPS(hybrid_stopping, struct task_struct *p, bool runnable)
     }
 
     /*
-     * FIFO フェーズ: このスライスで実際に使ったランタイムを計算。
-     * p->se.sum_exec_runtime は停止直前の累積値なので差分を取る。
+     * FIFO フェーズ:
+     * このスライスで，タスクがどの程度 CPU を使ったのかを計算する
      */
     elapsed_ns = p->se.sum_exec_runtime - tctx->fifo_start_runtime_ns;
 
@@ -318,6 +328,7 @@ void BPF_STRUCT_OPS(hybrid_enable, struct task_struct *p)
 
     tctx->promoted              = false;
     tctx->fifo_start_runtime_ns = 0;
+    tctx->cfs_start_runtime_ns = 0;
     tctx->vtime                 = vtime_now;
 }
 
