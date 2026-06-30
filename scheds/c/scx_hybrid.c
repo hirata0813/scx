@@ -142,6 +142,14 @@ int main(int argc, char *argv[])
 
     /* ---- libbpf verbosity ---- */
     libbpf_set_strict_mode(LIBBPF_STRICT_ALL);
+    unlink("/sys/fs/bpf/debug_filter");
+    unlink("/sys/fs/bpf/task_ctx_stor");
+    unlink("/sys/fs/bpf/stats");
+	unlink("/sys/fs/bpf/_data_uei_dump");
+	unlink("/sys/fs/bpf/hybrid_ops");
+	unlink("/sys/fs/bpf/scx_hybr_bss");
+	unlink("/sys/fs/bpf/scx_hybr_data");
+	unlink("/sys/fs/bpf/scx_hybr_rodata");
 
     /* ---- BPF オブジェクトを開く ---- */
     skel = SCX_OPS_OPEN(hybrid_ops, scx_hybrid);
@@ -151,6 +159,8 @@ int main(int argc, char *argv[])
 
     /* ---- ロード & アタッチ ---- */
     SCX_OPS_LOAD(skel, hybrid_ops, scx_hybrid, uei);
+    bpf_object__pin_maps(skel->obj, "/sys/fs/bpf"); // BPF Map をピン留め
+
     link = SCX_OPS_ATTACH(skel, hybrid_ops, scx_hybrid);
 
     printf("Hybrid sched_ext scheduler loaded.\n");

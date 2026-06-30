@@ -78,6 +78,28 @@ struct {
     __type(value, struct task_ctx);
 } task_ctx_stor SEC(".maps");
 
+
+/* ------------------------------------------------------------------ */
+/* 特定のタスクに対してのみデバッグしたいとき                                */
+/* ------------------------------------------------------------------ */
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 8192);
+    __type(key, pid_t);
+    __type(value, u8); /* flag: 1 if priority task */
+} debug_filter SEC(".maps");
+
+static bool is_debug_task(struct task_struct *p)
+{
+    pid_t pid = p->pid;
+    u8 *val;
+
+    /* Check if TID is in priority list */
+    val = bpf_map_lookup_elem(&debug_filter, &pid);
+
+    return (val != NULL && *val == 1);
+}
+
 /* ------------------------------------------------------------------ */
 /* 統計 (デバッグ用、per-CPU)                                          */
 /* ------------------------------------------------------------------ */
@@ -180,8 +202,10 @@ void BPF_STRUCT_OPS(hybrid_enqueue, struct task_struct *p, u64 enq_flags)
     } else {
         /* CFS フェーズ: vtime ベース */
         u64 vtime = tctx->vtime; // vtime は，タスクがこれまでに，実際に CPU を掴んで実行された累積時間．小さいほど「CPU をあまり使ってないので優先して実行すべき」という意味
-	    bpf_printk("PID %d: tctx->vtime: %d", p->pid, tctx->vtime);
 
+        if (is_debug_task(p)) {
+	        bpf_printk("PID %d: tctx->vtime: %d", p->pid, tctx->vtime);
+        }
         /*
          * vtime_now は，システム全体における「現在の仮想時間の基準」(runnning と stopping で更新)
          * vtime_now は単調増加のみ
