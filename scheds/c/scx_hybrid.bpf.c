@@ -158,11 +158,33 @@ s32 BPF_STRUCT_OPS(hybrid_select_cpu, struct task_struct *p,
     bool is_idle = false;
     s32 cpu;
 
-    cpu = scx_bpf_select_cpu_dfl(p, prev_cpu, wake_flags, &is_idle);
-    //if (is_idle) {
-    //    stat_inc(STAT_DIRECT_DISPATCH);
-    //    scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL, preemption_slice_ns, 0);
-    //}
+    struct task_ctx *tctx = NULL;
+    tctx = bpf_task_storage_get(&task_ctx_stor, p, 0, 0);
+
+    if (!tctx) {
+        /* フォールバック: グローバル FIFO DSQ へ */
+        cpu = scx_bpf_select_cpu_dfl(p, prev_cpu, wake_flags, &is_idle);
+        return cpu;
+    }
+
+    if (is_debug_task(p)) {
+        if (p->nr_cpus_allowed == 1) {
+            cpu = scx_bpf_select_cpu_dfl(p, prev_cpu, wake_flags, &is_idle);
+        } else if (!tctx->promoted) {
+            cpu = 0; // デバッグ対象かつ FIFO
+	        bpf_printk("PID: %d, This is debug task. CPU=0", p->pid);
+        } else {
+            cpu = 1; // デバッグ対象かつ CFS
+	        bpf_printk("PID: %d, This is debug task. CPU=1", p->pid);
+        }
+    } else { // デバッグ対象でない
+        if (p->nr_cpus_allowed == 1) {
+            cpu = scx_bpf_select_cpu_dfl(p, prev_cpu, wake_flags, &is_idle);
+        } else {
+            cpu = 2;
+        }
+    }
+
     return cpu;
 }
 
@@ -182,30 +204,31 @@ s32 BPF_STRUCT_OPS(hybrid_select_cpu, struct task_struct *p,
  */
 void BPF_STRUCT_OPS(hybrid_enqueue, struct task_struct *p, u64 enq_flags)
 {
-    struct task_ctx *tctx;
-
+    struct task_ctx *tctx = NULL;
     tctx = bpf_task_storage_get(&task_ctx_stor, p, 0, 0);
-    //if (tctx) {
-	   // bpf_printk("PID %d: tctx->promoted: %d", p->pid, tctx->promoted);
-    //}
-
     if (!tctx) {
         /* フォールバック: グローバル FIFO DSQ へ */
         scx_bpf_dsq_insert(p, SCX_DSQ_GLOBAL, preemption_slice_ns, enq_flags);
         return;
     }
+    s32  cpu;
 
     if (!tctx->promoted) {
         /* FIFO フェーズ */
+
         stat_inc(STAT_FIFO_ENQUEUE);
-        scx_bpf_dsq_insert(p, FIFO_DSQ, preemption_slice_ns, enq_flags);
+        if (is_debug_task(p) && p->nr_cpus_allowed != 1) {
+            cpu = 0;
+            bpf_printk("enqueue() before enqueue: PID=%d sum_exec=%llu slice=%llu", p->pid, p->se.sum_exec_runtime, p->scx.slice);
+            scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | cpu, preemption_slice_ns, enq_flags); // nr_cpus_allowrd != 1，debug task であることを確認して，その場合はここでもう一度 CPU 選択してエンキュー
+            bpf_printk("enqueue() after enqueue: PID=%d sum_exec=%llu slice=%llu", p->pid, p->se.sum_exec_runtime, p->scx.slice);
+        } else {
+            scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL, preemption_slice_ns, enq_flags);
+        }
     } else {
         /* CFS フェーズ: vtime ベース */
         u64 vtime = tctx->vtime; // vtime は，タスクがこれまでに，実際に CPU を掴んで実行された累積時間．小さいほど「CPU をあまり使ってないので優先して実行すべき」という意味
 
-        if (is_debug_task(p)) {
-	        bpf_printk("PID %d: tctx->vtime: %d", p->pid, tctx->vtime);
-        }
         /*
          * vtime_now は，システム全体における「現在の仮想時間の基準」(runnning と stopping で更新)
          * vtime_now は単調増加のみ
@@ -218,7 +241,16 @@ void BPF_STRUCT_OPS(hybrid_enqueue, struct task_struct *p, u64 enq_flags)
             vtime = vtime_now - preemption_slice_ns;
 
         stat_inc(STAT_CFS_ENQUEUE);
-        scx_bpf_dsq_insert_vtime(p, CFS_DSQ, preemption_slice_ns, vtime, enq_flags); // キューイングされたタスクは，vtime の小さい順にソートされる
+
+        if (is_debug_task(p) && p->nr_cpus_allowed != 1) {
+            cpu = 1;
+            bpf_printk("enqueue() before enqueue: PID=%d sum_exec=%llu slice=%llu", p->pid, p->se.sum_exec_runtime, p->scx.slice);
+            scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | cpu, preemption_slice_ns, enq_flags); // nr_cpus_allowrd != 1，debug task であることを確認して，その場合はここでもう一度 CPU 選択してエンキュー
+            bpf_printk("enqueue() after enqueue: PID=%d sum_exec=%llu slice=%llu", p->pid, p->se.sum_exec_runtime, p->scx.slice);
+        } else {
+            scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL, preemption_slice_ns, enq_flags);
+        }
+        //scx_bpf_dsq_insert_vtime(p, SCX_DSQ_LOCAL_ON | cpu, preemption_slice_ns, vtime, enq_flags); // キューイングされたタスクは，vtime の小さい順にソートされる
     }
 }
 
@@ -255,6 +287,10 @@ void BPF_STRUCT_OPS(hybrid_running, struct task_struct *p)
 {
     struct task_ctx *tctx;
 
+    if (is_debug_task(p) && p->nr_cpus_allowed != 1) {
+        bpf_printk("running(): PID=%d sum_exec=%llu slice=%llu",
+               p->pid, p->se.sum_exec_runtime, p->scx.slice);
+    }
     tctx = bpf_task_storage_get(&task_ctx_stor, p, 0, 0);
     if (!tctx)
         return;
@@ -287,7 +323,10 @@ void BPF_STRUCT_OPS(hybrid_running, struct task_struct *p)
 void BPF_STRUCT_OPS(hybrid_stopping, struct task_struct *p, bool runnable)
 {
     struct task_ctx *tctx;
-    u64 elapsed_ns;
+    if (is_debug_task(p) && p->nr_cpus_allowed != 1) {
+        bpf_printk("stopping(): PID=%d sum_exec=%llu slice=%llu runnable=%d",
+               p->pid, p->se.sum_exec_runtime, p->scx.slice, runnable);
+    }
 
     tctx = bpf_task_storage_get(&task_ctx_stor, p, 0, 0);
     if (!tctx)
@@ -309,18 +348,21 @@ void BPF_STRUCT_OPS(hybrid_stopping, struct task_struct *p, bool runnable)
 
     /*
      * FIFO フェーズ:
-     * このスライスで，タスクがどの程度 CPU を使ったのかを計算する
-     */
-    elapsed_ns = p->se.sum_exec_runtime - tctx->fifo_start_runtime_ns;
 
-    /*
-     * タイムスライスを消費しきったか?
-     *   runnable == true かつ elapsed_ns >= preemption_slice_ns
-     *   → カーネルによるプリエンプト (スライス切れ) であるとみなす。
-     *
-     * runnable == false は自発的なブロック (I/O 待ち等) なので FIFO のまま。
+     * FIFO -> CFS へ昇格するかの判定を行う
+     * 判定条件: 実行開始してから，一度も他タスクにプリエンプションされず，与えられたタイムスライス(preemption_slice_ns)分だけ CPU を掴んで実行したかどうか
+     * 判定に用いる変数:
+     * 1. runnable
+     *      true は，このタスクがまだ走行可能(であるが，タイムスライスを使い果たしプリエンプションされた)であることを示す
+     *      false は，自発的なブロック (I/O 待ち等)であることを示す
+     *      「短時間で終わる処理を何度も繰り返す I/O バウンドなタスク」は FIFO に留まるように設計している
+     * 2. p->scx.slice
+     *      このタスクが持っている残りタイムスライスを示す
+     *      scx_bpf_dsq_insert()などのエンキュー関数において，引数で与えられたタイムスライスの値が scx.slice メンバにもセットされる
+     *      p->scx.slice == 0 は，与えられたタイムスライスを使い果たしたことを示す
+     *      p->scx.slice > 0 は，他の高優先度タスク(カーネルスレッドなど)に割り込まれたか，自発的にブロックしたかのどちらか
      */
-    if (runnable && elapsed_ns >= preemption_slice_ns) {
+    if (runnable && p->scx.slice == 0) {
         /* CFS フェーズへ昇格 */
         tctx->promoted = true;
         /*

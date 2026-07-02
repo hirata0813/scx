@@ -109,7 +109,8 @@ int main(int argc, char *argv[])
 {
     struct scx_hybrid *skel;
     struct bpf_link        *link = NULL;
-    uint64_t preemption_ns   = 50000ULL; /* 50 µs */
+    //uint64_t preemption_ns   = 50000ULL; /* 50 µs */
+    uint64_t preemption_ns   = 10000000ULL; /* 50 µs */
     int      stats_interval  = 1;
     int      ret             = 0;
 
