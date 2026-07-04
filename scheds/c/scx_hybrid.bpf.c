@@ -211,18 +211,24 @@ void BPF_STRUCT_OPS(hybrid_enqueue, struct task_struct *p, u64 enq_flags)
         scx_bpf_dsq_insert(p, SCX_DSQ_GLOBAL, preemption_slice_ns, enq_flags);
         return;
     }
+
+    // フォールバック処理: 許可 CPU が1つのような特別なタスクの場合は，例外としてローカルに入れる
+    if (p->nr_cpus_allowed == 1) {
+        scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL, preemption_slice_ns, enq_flags);
+        return;
+    }
+
     s32  cpu;
 
     if (!tctx->promoted) {
         /* FIFO フェーズ */
 
         stat_inc(STAT_FIFO_ENQUEUE);
-        if (is_debug_task(p) && p->nr_cpus_allowed != 1) {
-            cpu = 0;
-            scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | cpu, preemption_slice_ns, enq_flags); // nr_cpus_allowrd != 1，debug task であることを確認して，その場合はここでもう一度 CPU 選択してエンキュー
-        } else {
-            scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL, preemption_slice_ns, enq_flags);
-        }
+
+        cpu = 0; // TODO: ここは，FIFO 対応の CPU を pick するようにする．例えば以下のような形
+        // s32 fifo_cpu;
+        // fifo_cpu = pick_fifo_cpu();
+        scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | cpu, preemption_slice_ns, enq_flags);
     } else {
         /* CFS フェーズ: vtime ベース */
         u64 vtime = tctx->vtime; // vtime は，タスクがこれまでに，実際に CPU を掴んで実行された累積時間．小さいほど「CPU をあまり使ってないので優先して実行すべき」という意味
@@ -240,16 +246,12 @@ void BPF_STRUCT_OPS(hybrid_enqueue, struct task_struct *p, u64 enq_flags)
 
         stat_inc(STAT_CFS_ENQUEUE);
 
-        if (is_debug_task(p) && p->nr_cpus_allowed != 1) {
-            // debug task かつ，許可 CPU が複数ある場合のみ，CPU 1 の対応 CFS DSQ に enqueue
-            cpu = 1;
-            u64 dsq_id = CFS_DSQ(cpu);
-            bpf_printk("enqueue() CFS phase: pid=%d cpu=%d dsq_id=0x%llx", p->pid, cpu, dsq_id);
-            scx_bpf_dsq_insert_vtime(p, dsq_id, preemption_slice_ns, vtime, enq_flags);
-        } else {
-            scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL, preemption_slice_ns, enq_flags);
-        }
-        //scx_bpf_dsq_insert_vtime(p, SCX_DSQ_LOCAL_ON | cpu, preemption_slice_ns, vtime, enq_flags); // キューイングされたタスクは，vtime の小さい順にソートされる
+        cpu = 1; // TODO: ここは，CFS 対応の CPU を pick するようにする．例えば以下のような形
+        // s32 cfs_cpu;
+        // cfs_cpu = pick_cfs_cpu();
+        // u64 dsq_id = CFS_DSQ(cfs_cpu);
+        u64 dsq_id = CFS_DSQ(cpu);
+        scx_bpf_dsq_insert_vtime(p, dsq_id, preemption_slice_ns, vtime, enq_flags);
     }
 }
 
@@ -267,10 +269,6 @@ void BPF_STRUCT_OPS(hybrid_dispatch, s32 cpu, struct task_struct *prev)
 {
     u64 dsq_id = CFS_DSQ(cpu);
     bool moved = scx_bpf_dsq_move_to_local(dsq_id);
-
-    if (cpu == 1) {
-        bpf_printk("dispatch(): cpu=%d dsq_id=0x%llx moved=%d", cpu, dsq_id, moved);
-    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -286,10 +284,6 @@ void BPF_STRUCT_OPS(hybrid_running, struct task_struct *p)
 {
     struct task_ctx *tctx;
 
-    if (is_debug_task(p) && p->nr_cpus_allowed != 1) {
-        bpf_printk("running(): PID=%d sum_exec=%llu slice=%llu",
-               p->pid, p->se.sum_exec_runtime, p->scx.slice);
-    }
     tctx = bpf_task_storage_get(&task_ctx_stor, p, 0, 0);
     if (!tctx)
         return;
@@ -322,10 +316,6 @@ void BPF_STRUCT_OPS(hybrid_running, struct task_struct *p)
 void BPF_STRUCT_OPS(hybrid_stopping, struct task_struct *p, bool runnable)
 {
     struct task_ctx *tctx;
-    if (is_debug_task(p) && p->nr_cpus_allowed != 1) {
-        bpf_printk("stopping(): PID=%d sum_exec=%llu slice=%llu runnable=%d",
-               p->pid, p->se.sum_exec_runtime, p->scx.slice, runnable);
-    }
 
     tctx = bpf_task_storage_get(&task_ctx_stor, p, 0, 0);
     if (!tctx)
