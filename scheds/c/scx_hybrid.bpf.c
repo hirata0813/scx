@@ -54,12 +54,6 @@ struct task_ctx {
     bool promoted;
 
     /*
-     * このタスクが FIFO フェーズに入った際の，CPU 累積実行時間(ns)
-     * running() コールバックで記録し、stopping() で経過を計算する。
-     */
-    u64 fifo_start_runtime_ns;
-
-    /*
      * このタスクが CFS フェーズに入った際の，CPU 累積実行時間(ns)
      * running() コールバックで記録し、stopping() で経過を計算する。
      */
@@ -289,8 +283,7 @@ void BPF_STRUCT_OPS(hybrid_running, struct task_struct *p)
         return;
 
     if (!tctx->promoted) {
-        /* FIFO フェーズ: スライス開始時の CPU 累積実行時間を記録 */
-        tctx->fifo_start_runtime_ns = p->se.sum_exec_runtime; // sum_exec_runtime メンバは，そのタスクが生まれてから今まで CPU 上で実際に実行された累積時間(ns)
+        /* FIFO フェーズ: 特にやることはなし*/
     } else {
         /* CFS フェーズ: スライス開始時の CPU 累積実行時間を記録し，vtime_now を最新化 */
         tctx->cfs_start_runtime_ns = p->se.sum_exec_runtime;
@@ -382,7 +375,6 @@ void BPF_STRUCT_OPS(hybrid_enable, struct task_struct *p)
         return;
 
     tctx->promoted              = false;
-    tctx->fifo_start_runtime_ns = 0;
     tctx->cfs_start_runtime_ns = 0;
     tctx->vtime                 = vtime_now;
 }
