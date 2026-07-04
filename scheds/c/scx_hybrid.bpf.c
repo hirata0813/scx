@@ -34,8 +34,8 @@ UEI_DEFINE(uei);
 /* ------------------------------------------------------------------ */
 /* DSQ IDs                                                              */
 /* ------------------------------------------------------------------ */
-#define FIFO_DSQ  0ULL   /* FIFO  : タイムスライス内に完了するタスク用 */
-#define CFS_DSQ   1ULL   /* vtime : タイムスライスを超えたタスク用     */
+#define MAX_CPUS 64
+#define CFS_DSQ(cpu)   ((u64)(cpu) | (1ULL << 32)) /* CFS(vtime)用DSQ: 下位32ビットを CPU 番号に，上位32ビットを DSQ 種別とした DSQ ID */
 
 /* ------------------------------------------------------------------ */
 /* 設定 (ユーザー空間から BPF_MAP_TYPE_ARRAY で書き換え可能)           */
@@ -219,9 +219,7 @@ void BPF_STRUCT_OPS(hybrid_enqueue, struct task_struct *p, u64 enq_flags)
         stat_inc(STAT_FIFO_ENQUEUE);
         if (is_debug_task(p) && p->nr_cpus_allowed != 1) {
             cpu = 0;
-            bpf_printk("enqueue() before enqueue: PID=%d sum_exec=%llu slice=%llu", p->pid, p->se.sum_exec_runtime, p->scx.slice);
             scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | cpu, preemption_slice_ns, enq_flags); // nr_cpus_allowrd != 1，debug task であることを確認して，その場合はここでもう一度 CPU 選択してエンキュー
-            bpf_printk("enqueue() after enqueue: PID=%d sum_exec=%llu slice=%llu", p->pid, p->se.sum_exec_runtime, p->scx.slice);
         } else {
             scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL, preemption_slice_ns, enq_flags);
         }
@@ -243,10 +241,11 @@ void BPF_STRUCT_OPS(hybrid_enqueue, struct task_struct *p, u64 enq_flags)
         stat_inc(STAT_CFS_ENQUEUE);
 
         if (is_debug_task(p) && p->nr_cpus_allowed != 1) {
+            // debug task かつ，許可 CPU が複数ある場合のみ，CPU 1 の対応 CFS DSQ に enqueue
             cpu = 1;
-            bpf_printk("enqueue() before enqueue: PID=%d sum_exec=%llu slice=%llu", p->pid, p->se.sum_exec_runtime, p->scx.slice);
-            scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | cpu, preemption_slice_ns, enq_flags); // nr_cpus_allowrd != 1，debug task であることを確認して，その場合はここでもう一度 CPU 選択してエンキュー
-            bpf_printk("enqueue() after enqueue: PID=%d sum_exec=%llu slice=%llu", p->pid, p->se.sum_exec_runtime, p->scx.slice);
+            u64 dsq_id = CFS_DSQ(cpu);
+            bpf_printk("enqueue() CFS phase: pid=%d cpu=%d dsq_id=0x%llx", p->pid, cpu, dsq_id);
+            scx_bpf_dsq_insert_vtime(p, dsq_id, preemption_slice_ns, vtime, enq_flags);
         } else {
             scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL, preemption_slice_ns, enq_flags);
         }
@@ -266,12 +265,12 @@ void BPF_STRUCT_OPS(hybrid_enqueue, struct task_struct *p, u64 enq_flags)
  */
 void BPF_STRUCT_OPS(hybrid_dispatch, s32 cpu, struct task_struct *prev)
 {
-    /* まず FIFO キューを試みる */
-    if (scx_bpf_dsq_move_to_local(FIFO_DSQ))
-        return;
+    u64 dsq_id = CFS_DSQ(cpu);
+    bool moved = scx_bpf_dsq_move_to_local(dsq_id);
 
-    /* 次に vtime (CFS) キュー */
-    scx_bpf_dsq_move_to_local(CFS_DSQ);
+    if (cpu == 1) {
+        bpf_printk("dispatch(): cpu=%d dsq_id=0x%llx moved=%d", cpu, dsq_id, moved);
+    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -406,15 +405,16 @@ void BPF_STRUCT_OPS(hybrid_enable, struct task_struct *p)
  */
 s32 BPF_STRUCT_OPS_SLEEPABLE(hybrid_init)
 {
-    int err;
+    s32 cpu;
+    s32 err;
+    u32 nr_cpu_ids = scx_bpf_nr_cpu_ids();
 
-    err = scx_bpf_create_dsq(FIFO_DSQ, -1);
-    if (err)
-        return err;
-
-    err = scx_bpf_create_dsq(CFS_DSQ, -1);
-    if (err)
-        return err;
+    // CPU 個数分だけ，各 CPU 専用の CFS 用キューを作る
+    bpf_for(cpu, 0, nr_cpu_ids) {
+        err = scx_bpf_create_dsq(CFS_DSQ(cpu), -1);
+        if (err)
+            return err;
+    }
 
     return 0;
 }
