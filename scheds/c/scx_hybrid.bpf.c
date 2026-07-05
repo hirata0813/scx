@@ -71,6 +71,12 @@ struct task_ctx {
      * CFS DSQ にエンキューする際は，都度，vtime の値で DSQ 内のタスクが並べ替えられる
      */
     u64 vtime;
+
+    /* CFS フェーズで，前回実行していた CPU を記録する
+     * マイグレーションが発生した際，vtime を適切な値に更新できるようにするため
+     */
+    s32 last_cpu;
+
 };
 
 struct {
@@ -280,6 +286,25 @@ void BPF_STRUCT_OPS(hybrid_enqueue, struct task_struct *p, u64 enq_flags)
         /* CFS フェーズ: vtime ベース */
         u64 vtime = tctx->vtime; // vtime は，タスクがこれまでに，実際に CPU を掴んで実行された累積時間．小さいほど「CPU をあまり使ってないので優先して実行すべき」という意味
 
+
+        cpu = 1; // TODO: ここは，CFS 対応の CPU を pick するようにする．例えば以下のような形
+        // s32 cfs_cpu;
+        // cfs_cpu = pick_cfs_cpu();
+        // u64 dsq_id = CFS_DSQ(cfs_cpu);
+
+        u64 vtime_now = get_vtime_now(cpu);
+        // CPU マイグレーションがあった場合，vtime を新しい CPU の基準に変換する
+        if (tctx->last_cpu >= 0 && tctx->last_cpu != cpu) {
+            u64 old_now = get_vtime_now(tctx->last_cpu);
+            // 旧 CPU での「相対的な位置」を新 CPU に移植する
+            // relative = vtime - old_now  (負なら末尾より前、正なら末尾より後)
+            // new_vtime = now + relative
+            if (old_now > 0) {
+                s64 relative = (s64)(vtime - old_now);
+                vtime = (u64)((s64)vtime_now + relative);
+            }
+        }
+
         /*
          * vtime_now は，システム全体における「現在の仮想時間の基準」(runnning と stopping で更新)
          * vtime_now は単調増加のみ
@@ -288,14 +313,6 @@ void BPF_STRUCT_OPS(hybrid_enqueue, struct task_struct *p, u64 enq_flags)
          * クランプとは，vtime が小さすぎるタスク(例えばずっと I/O 待ちで寝てたやつ)の vtime を引き上げること
          * このようにして，タスクがキューの中で極端に有利な位置に入るのを防ぐ
          */
-
-        cpu = 1; // TODO: ここは，CFS 対応の CPU を pick するようにする．例えば以下のような形
-        // s32 cfs_cpu;
-        // cfs_cpu = pick_cfs_cpu();
-        // u64 dsq_id = CFS_DSQ(cfs_cpu);
-
-
-        u64 vtime_now = get_vtime_now(cpu);
         if (vtime_before(vtime, vtime_now - preemption_slice_ns)){
             vtime = vtime_now - preemption_slice_ns;
             tctx->vtime = vtime;
@@ -303,6 +320,7 @@ void BPF_STRUCT_OPS(hybrid_enqueue, struct task_struct *p, u64 enq_flags)
 
         stat_inc(STAT_CFS_ENQUEUE);
 
+        tctx->last_cpu = cpu;
         u64 dsq_id = CFS_DSQ(cpu);
         scx_bpf_dsq_insert_vtime(p, dsq_id, preemption_slice_ns, vtime, enq_flags);
     }
@@ -461,6 +479,7 @@ void BPF_STRUCT_OPS(hybrid_enable, struct task_struct *p)
     tctx->promoted              = false;
     tctx->cfs_start_runtime_ns = 0;
     tctx->vtime                 = 0;
+    tctx->last_cpu              = -1; // 未設定を示す
 }
 
 /* ------------------------------------------------------------------ */
