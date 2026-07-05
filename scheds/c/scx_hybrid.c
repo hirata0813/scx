@@ -143,6 +143,7 @@ int main(int argc, char *argv[])
 
     /* ---- libbpf verbosity ---- */
     libbpf_set_strict_mode(LIBBPF_STRICT_ALL);
+    unlink("/sys/fs/bpf/vtime_now_map");
     unlink("/sys/fs/bpf/debug_filter");
     unlink("/sys/fs/bpf/task_ctx_stor");
     unlink("/sys/fs/bpf/stats");

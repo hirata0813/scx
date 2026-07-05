@@ -34,8 +34,15 @@ UEI_DEFINE(uei);
 /* ------------------------------------------------------------------ */
 /* DSQ IDs                                                              */
 /* ------------------------------------------------------------------ */
-#define MAX_CPUS 64
-#define CFS_DSQ(cpu)   ((u64)(cpu) | (1ULL << 32)) /* CFS(vtime)用DSQ: 下位32ビットを CPU 番号に，上位32ビットを DSQ 種別とした DSQ ID */
+/* 
+ * CFS(vtime)用DSQ: 下位32ビットを CPU 番号に，上位32ビットを DSQ 種別とした DSQ ID
+ * 例えば，CPU 1 に対応する CFS DSQ の ID は「0x100000001」となる
+ * 0x1_00000001
+ *   ↑ ↑
+ *   |  └─ 下位32bit = 0x00000001 = 1  (CPU番号)
+ *   └──── 33bit目    = 1              (DSQ種別マーカー、1ULL<<32)
+ */
+#define CFS_DSQ(cpu)   ((u64)(cpu) | (1ULL << 32))
 
 /* ------------------------------------------------------------------ */
 /* 設定 (ユーザー空間から BPF_MAP_TYPE_ARRAY で書き換え可能)           */
@@ -60,8 +67,9 @@ struct task_ctx {
     u64 cfs_start_runtime_ns;
 
     /* CFS フェーズでの仮想時間 (vtime)
-       vtime は，タスクがこれまでに，実際に CPU を掴んで実行された累積時間．小さいほど「CPU をあまり使ってないので優先して実行すべき」という意味
-    */
+     * vtime は，タスクがこれまでに，実際に CPU を掴んで実行された累積時間．小さいほど「CPU をあまり使ってないので優先して実行すべき」という意味
+     * CFS DSQ にエンキューする際は，都度，vtime の値で DSQ 内のタスクが並べ替えられる
+     */
     u64 vtime;
 };
 
@@ -80,15 +88,18 @@ struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 8192);
     __type(key, pid_t);
-    __type(value, u8); /* flag: 1 if priority task */
+    __type(value, u8);
 } debug_filter SEC(".maps");
 
+/*
+ * debug_filter という BPF Map にエントリがあり，かつ value が1のときに，is_debug_task()は true を返す
+ * ログのフィルタリングなどで利用する
+ */
 static bool is_debug_task(struct task_struct *p)
 {
     pid_t pid = p->pid;
     u8 *val;
 
-    /* Check if TID is in priority list */
     val = bpf_map_lookup_elem(&debug_filter, &pid);
 
     return (val != NULL && *val == 1);
@@ -134,9 +145,51 @@ static __always_inline bool vtime_before(u64 a, u64 b)
 
 /*
  * CFS_DSQ のグローバル最小 vtime を追跡する変数。
- * per-CPU でないのは scx_simple と同様のシンプルな単一キュー方式のため。
+ * CPU ごとに持たせる
  */
-static u64 vtime_now;
+
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, 4);
+    __type(key, u32);
+    __type(value, u64);
+} vtime_now_map SEC(".maps");
+
+static __always_inline u64 get_vtime_now(s32 cpu)
+{
+    u32 key = (u32)cpu;
+    u64 *val = bpf_map_lookup_elem(&vtime_now_map, &key);
+    return val ? *val : 0;
+}
+
+static __always_inline void update_vtime_now(s32 cpu, u64 vtime)
+{
+    u32 key = (u32)cpu;
+    u64 *val = bpf_map_lookup_elem(&vtime_now_map, &key);
+    if (val)
+        *val = vtime;
+}
+
+static __always_inline void print_vtime_now()
+{
+    u32 key0 = 0;
+    u32 key1 = 1;
+    u32 key2 = 2;
+    u32 key3 = 3;
+    u64 *vtime0;
+    u64 *vtime1;
+    u64 *vtime2;
+    u64 *vtime3;
+
+    vtime0 = bpf_map_lookup_elem(&vtime_now_map, &key0);
+    vtime1 = bpf_map_lookup_elem(&vtime_now_map, &key1);
+    vtime2 = bpf_map_lookup_elem(&vtime_now_map, &key2);
+    vtime3 = bpf_map_lookup_elem(&vtime_now_map, &key3);
+    
+    if(vtime0 && vtime1 && vtime2 && vtime3){
+        bpf_printk("vtime_now: CPU0:%llu, CPU1:%llu, CPU2:%llu, CPU3:%llu", *vtime0, *vtime1, *vtime2, *vtime3);
+    }
+}
 
 /* ------------------------------------------------------------------ */
 /* ops.select_cpu                                                       */
@@ -235,15 +288,29 @@ void BPF_STRUCT_OPS(hybrid_enqueue, struct task_struct *p, u64 enq_flags)
          * クランプとは，vtime が小さすぎるタスク(例えばずっと I/O 待ちで寝てたやつ)の vtime を引き上げること
          * このようにして，タスクがキューの中で極端に有利な位置に入るのを防ぐ
          */
-        if (vtime_before(vtime, vtime_now - preemption_slice_ns))
-            vtime = vtime_now - preemption_slice_ns;
-
-        stat_inc(STAT_CFS_ENQUEUE);
 
         cpu = 1; // TODO: ここは，CFS 対応の CPU を pick するようにする．例えば以下のような形
         // s32 cfs_cpu;
         // cfs_cpu = pick_cfs_cpu();
         // u64 dsq_id = CFS_DSQ(cfs_cpu);
+
+
+        u64 vtime_now = get_vtime_now(cpu);
+        if (vtime_before(vtime, vtime_now - preemption_slice_ns)){
+            if (is_debug_task(p) && p->nr_cpus_allowed != 1){
+                bpf_printk("enqueue(): before updating process vtime: before: %llu, tctx->vtime:%llu", vtime, tctx->vtime);
+            }
+
+            vtime = vtime_now - preemption_slice_ns;
+
+            if (is_debug_task(p) && p->nr_cpus_allowed != 1){
+                bpf_printk("enqueue(): after updating process vtime: before: %llu, tctx->vtime:%llu", vtime, tctx->vtime);
+            }
+
+        }
+
+        stat_inc(STAT_CFS_ENQUEUE);
+
         u64 dsq_id = CFS_DSQ(cpu);
         scx_bpf_dsq_insert_vtime(p, dsq_id, preemption_slice_ns, vtime, enq_flags);
     }
@@ -282,13 +349,33 @@ void BPF_STRUCT_OPS(hybrid_running, struct task_struct *p)
     if (!tctx)
         return;
 
+    s32 cpu = bpf_get_smp_processor_id();
+
     if (!tctx->promoted) {
         /* FIFO フェーズ: 特にやることはなし*/
     } else {
         /* CFS フェーズ: スライス開始時の CPU 累積実行時間を記録し，vtime_now を最新化 */
+
         tctx->cfs_start_runtime_ns = p->se.sum_exec_runtime;
-        if (vtime_before(vtime_now, tctx->vtime))
-            vtime_now = tctx->vtime;
+        u64 vtime_now = get_vtime_now(cpu);
+
+        bpf_printk("running(): pid %d, CPU %d vtime_now:%llu, process vtime:%llu", p->pid, cpu, vtime_now, tctx->vtime);
+
+        if (vtime_before(vtime_now, tctx->vtime)){
+            if (is_debug_task(p) && p->nr_cpus_allowed != 1){
+                bpf_printk("running(): CPU %d: before updating vtime_now", cpu);
+                print_vtime_now();
+            }
+
+            update_vtime_now(cpu, tctx->vtime);
+
+            if (is_debug_task(p) && p->nr_cpus_allowed != 1){
+                bpf_printk("running(): CPU %d: After updating vtime_now", cpu);
+                print_vtime_now();
+            }
+
+        }
+
     }
 }
 
@@ -310,6 +397,8 @@ void BPF_STRUCT_OPS(hybrid_stopping, struct task_struct *p, bool runnable)
 {
     struct task_ctx *tctx;
 
+    s32 cpu = bpf_get_smp_processor_id();
+
     tctx = bpf_task_storage_get(&task_ctx_stor, p, 0, 0);
     if (!tctx)
         return;
@@ -323,8 +412,20 @@ void BPF_STRUCT_OPS(hybrid_stopping, struct task_struct *p, bool runnable)
                                                               // つまり，p->se.sum_exec_runtime から，タスク実行開始時点での CPU 累積実行時間を，引く必要がある
         tctx->vtime += used;
         /* vtime_now を前に進める */
-        if (vtime_before(vtime_now, tctx->vtime))
-            vtime_now = tctx->vtime;
+        u64 vtime_now = get_vtime_now(cpu);
+        if (vtime_before(vtime_now, tctx->vtime)){
+            if (is_debug_task(p) && p->nr_cpus_allowed != 1){
+                bpf_printk("stopping(): CPU %d: before updating vtime_now", cpu);
+                print_vtime_now();
+            }
+
+            update_vtime_now(cpu, tctx->vtime);
+
+            if (is_debug_task(p) && p->nr_cpus_allowed != 1){
+                bpf_printk("stopping(): CPU %d: After updating vtime_now", cpu);
+                print_vtime_now();
+            }
+        }
         return;
     }
 
@@ -351,7 +452,11 @@ void BPF_STRUCT_OPS(hybrid_stopping, struct task_struct *p, bool runnable)
          * 初回 vtime は現在の vtime_now に設定 (新規タスクと同等に扱う)。
          * これにより CFS_DSQ の末尾近くに投入される。
          */
-        tctx->vtime = vtime_now;
+        tctx->vtime = 0;
+        
+        if (is_debug_task(p) && p->nr_cpus_allowed != 1){
+            bpf_printk("PID %d is promoted to CFS\n\n", p->pid);
+        }
         stat_inc(STAT_CFS_PROMOTE);
     }
 }
@@ -376,7 +481,7 @@ void BPF_STRUCT_OPS(hybrid_enable, struct task_struct *p)
 
     tctx->promoted              = false;
     tctx->cfs_start_runtime_ns = 0;
-    tctx->vtime                 = vtime_now;
+    tctx->vtime                 = 0;
 }
 
 /* ------------------------------------------------------------------ */
