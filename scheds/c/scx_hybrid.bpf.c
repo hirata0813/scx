@@ -297,16 +297,8 @@ void BPF_STRUCT_OPS(hybrid_enqueue, struct task_struct *p, u64 enq_flags)
 
         u64 vtime_now = get_vtime_now(cpu);
         if (vtime_before(vtime, vtime_now - preemption_slice_ns)){
-            if (is_debug_task(p) && p->nr_cpus_allowed != 1){
-                bpf_printk("enqueue(): before updating process vtime: before: %llu, tctx->vtime:%llu", vtime, tctx->vtime);
-            }
-
             vtime = vtime_now - preemption_slice_ns;
-
-            if (is_debug_task(p) && p->nr_cpus_allowed != 1){
-                bpf_printk("enqueue(): after updating process vtime: before: %llu, tctx->vtime:%llu", vtime, tctx->vtime);
-            }
-
+            tctx->vtime = vtime;
         }
 
         stat_inc(STAT_CFS_ENQUEUE);
@@ -359,21 +351,8 @@ void BPF_STRUCT_OPS(hybrid_running, struct task_struct *p)
         tctx->cfs_start_runtime_ns = p->se.sum_exec_runtime;
         u64 vtime_now = get_vtime_now(cpu);
 
-        bpf_printk("running(): pid %d, CPU %d vtime_now:%llu, process vtime:%llu", p->pid, cpu, vtime_now, tctx->vtime);
-
         if (vtime_before(vtime_now, tctx->vtime)){
-            if (is_debug_task(p) && p->nr_cpus_allowed != 1){
-                bpf_printk("running(): CPU %d: before updating vtime_now", cpu);
-                print_vtime_now();
-            }
-
             update_vtime_now(cpu, tctx->vtime);
-
-            if (is_debug_task(p) && p->nr_cpus_allowed != 1){
-                bpf_printk("running(): CPU %d: After updating vtime_now", cpu);
-                print_vtime_now();
-            }
-
         }
 
     }
