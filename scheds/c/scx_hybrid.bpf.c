@@ -3,17 +3,16 @@
  * Hybrid sched_ext Scheduler
  *
  * ロジック:
- *   - タスクが最初にエンキューされたとき、FIFO DSQ (fifo_dsq) に入る。
+ *   - タスクが最初にエンキューされたとき、FIFO DSQ (CPU のローカル DSQ) に入る。
  *   - FIFO DSQ 上のタスクは preemption_slice_ns ナノ秒間だけ実行される。
- *   - タイムスライス内に終了 (quiescent になる) したタスクは再び FIFO に戻る。
- *   - タイムスライスを使い切った (slice == 0 で stopping) タスクは
- *     CFS ライクな vtime DSQ (cfs_dsq) に格上げされ、以降は vtime ベースで
+ *   - FIFO において，タイムスライスを使い切る前に終了(他タスクの割り込みや自発的スリープ)したタスクは再び FIFO に戻る。
+ *   - タイムスライスを使い切って終了した(slice == 0 で stopping)タスクは，CFS ポリシ(CPU ごとに持つカスタム CFS DSQ) に格上げされ、以降は vtime ベースで
  *     スケジューリングされる。
  *
  * ghOSt 実装との対応:
  *   ghOSt HybridScheduler    →  この BPF スケジューラ
- *   ShortQueueRq (FIFO)      →  FIFO_DSQ  (カスタム FIFO DSQ)
- *   CfsRq (vtime)            →  CFS_DSQ   (カスタム vtime DSQ)
+ *   ShortQueueRq (FIFO)      →  FIFO_DSQ  (CPU のローカル DSQ)
+ *   CfsRq (vtime)            →  CFS_DSQ   (CPU ごとに持つカスタム CFS DSQ)
  *   preemption_time_slice_   →  preemption_slice_ns (ロDATA マップ経由で設定可)
  *   task->new_to_cfs         →  task_ctx->promoted (CFS へ昇格済みフラグ)
  *
@@ -150,8 +149,7 @@ static __always_inline bool vtime_before(u64 a, u64 b)
 }
 
 /*
- * CFS_DSQ のグローバル最小 vtime を追跡する変数。
- * CPU ごとに持たせる
+ * CPU ごとの CFS_DSQ の vtime を管理する Map
  */
 
 struct {
@@ -245,10 +243,10 @@ s32 BPF_STRUCT_OPS(hybrid_select_cpu, struct task_struct *p,
 /* ops.enqueue                                                          */
 /* ------------------------------------------------------------------ */
 /*
- * select_cpu() で直接ディスパッチされなかった場合に呼ばれる。
+ * タスクを DSQ にエンキューする際に呼ばれる
  *
- * - promoted == false → FIFO_DSQ に積む (タイムスライス = preemption_slice_ns)
- * - promoted == true  → CFS_DSQ  に vtime ベースで積む
+ * - promoted == false → FIFO が割り当てられた CPU を選び，その CPU のローカル DSQ にエンキュー (タイムスライス = preemption_slice_ns)
+ * - promoted == true  → CFS が割り当てられた CPU を選び，その CPU に紐付いた CFS_DSQ  に vtime ベースでエンキュー
  *
  * ghOSt:
  *   TaskNew / TaskRunnable が short_queue_.Enqueue() を呼ぶパスに相当。
@@ -284,8 +282,11 @@ void BPF_STRUCT_OPS(hybrid_enqueue, struct task_struct *p, u64 enq_flags)
         scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | cpu, preemption_slice_ns, enq_flags);
     } else {
         /* CFS フェーズ: vtime ベース */
-        u64 vtime = tctx->vtime; // vtime は，タスクがこれまでに，実際に CPU を掴んで実行された累積時間．小さいほど「CPU をあまり使ってないので優先して実行すべき」という意味
 
+        /* CFS フェーズでは，vtime の小さい順にスケジューリングされる
+         * vtime は，タスクがこれまでに，実際に CPU を掴んで実行された累積時間．CFS 小さいほど「CPU をあまり使ってないので優先して実行すべき」という意味
+         */
+        u64 vtime = tctx->vtime;
 
         cpu = 1; // TODO: ここは，CFS 対応の CPU を pick するようにする．例えば以下のような形
         // s32 cfs_cpu;
@@ -298,7 +299,7 @@ void BPF_STRUCT_OPS(hybrid_enqueue, struct task_struct *p, u64 enq_flags)
             u64 old_now = get_vtime_now(tctx->last_cpu);
             // 旧 CPU での「相対的な位置」を新 CPU に移植する
             // relative = vtime - old_now  (負なら末尾より前、正なら末尾より後)
-            // new_vtime = now + relative
+            // new_vtime = vtime_now + relative
             if (old_now > 0) {
                 s64 relative = (s64)(vtime - old_now);
                 vtime = (u64)((s64)vtime_now + relative);
@@ -306,8 +307,8 @@ void BPF_STRUCT_OPS(hybrid_enqueue, struct task_struct *p, u64 enq_flags)
         }
 
         /*
-         * vtime_now は，システム全体における「現在の仮想時間の基準」(runnning と stopping で更新)
-         * vtime_now は単調増加のみ
+         * vtime_now は，各 CFS DSQ における「現在の仮想時間の基準」
+         * vtime_now は単調増加のみで，runnning() と stopping() で更新する
          * vtime_before()により，vtime_now の1スライス以上後ろに取り残されているタスクを判定し，それらの vtime をクランプ
          * vtime_before(a, b)は，a < b であれば true を返す
          * クランプとは，vtime が小さすぎるタスク(例えばずっと I/O 待ちで寝てたやつ)の vtime を引き上げること
@@ -331,7 +332,8 @@ void BPF_STRUCT_OPS(hybrid_enqueue, struct task_struct *p, u64 enq_flags)
 /* ------------------------------------------------------------------ */
 /*
  * CPU が実行するタスクを探す際に呼ばれる。
- * FIFO_DSQ → CFS_DSQ の順で消費する。
+ * このハンドラは，CPU のローカル DSQ が空の際に呼ばれる．そのため，ローカル DSQ へエンキューする FIFO フェーズでは基本的に呼ばれず，CFS DSQ へエンキューする CFS フェーズで呼ばれる想定
+ * このハンドラを呼び出した CPU に対応する CFS DSQ に入っているタスクを，その CPU のローカル DSQ に move する
  *
  * ghOSt ShortQueueSchedule() における short_queue_ 優先、
  * 次に long_cpulist 上の CFS という順序と対応する。
@@ -346,8 +348,9 @@ void BPF_STRUCT_OPS(hybrid_dispatch, s32 cpu, struct task_struct *prev)
 /* ops.running                                                          */
 /* ------------------------------------------------------------------ */
 /*
- * タスクが CPU 上で実際に実行を開始した直後に呼ばれる。
- * FIFO フェーズのタスクについて、このスライスの開始時ランタイムを記録する。
+ * タスクが CPU 上で実際に実行を開始した直後に呼ばれる
+ * FIFO フェーズでは，特に何もしない
+ * CFS フェーズでは，スライス開始時点での CPU 累積実行時間を記録し，vtime_now を最新化
  *
  * ghOSt TaskOnCpu() に相当。
  */
@@ -359,14 +362,15 @@ void BPF_STRUCT_OPS(hybrid_running, struct task_struct *p)
     if (!tctx)
         return;
 
-    s32 cpu = bpf_get_smp_processor_id();
-
     if (!tctx->promoted) {
         /* FIFO フェーズ: 特にやることはなし*/
     } else {
-        /* CFS フェーズ: スライス開始時の CPU 累積実行時間を記録し，vtime_now を最新化 */
-
+        /* CFS フェーズ: スライス開始時点での CPU 累積実行時間を記録し，vtime_now を最新化
+         *              CPU 累積実行時間を記録するのは，stopping() で，そのスライスでの CPU 利用時間を計算し，タスクの vtime を更新するため
+         */
         tctx->cfs_start_runtime_ns = p->se.sum_exec_runtime;
+
+        s32 cpu = bpf_get_smp_processor_id();
         u64 vtime_now = get_vtime_now(cpu);
 
         if (vtime_before(vtime_now, tctx->vtime)){
@@ -405,23 +409,13 @@ void BPF_STRUCT_OPS(hybrid_stopping, struct task_struct *p, bool runnable)
          * CFS フェーズ: 実際に消費した CPU 時間を vtime に反映。
          * nice 値対応が必要なら inverse_weight を掛け算する。
          */
-        u64 used = p->se.sum_exec_runtime - tctx->cfs_start_runtime_ns; // このときの CFS での実行で，CPU をどの程度掴んで動いたのかを計算
-                                                              // つまり，p->se.sum_exec_runtime から，タスク実行開始時点での CPU 累積実行時間を，引く必要がある
+        u64 used = p->se.sum_exec_runtime - tctx->cfs_start_runtime_ns; // このスライスでの CFS 実行で，CPU をどの程度掴んで動いたのかを計算
+                                                                        // つまり，p->se.sum_exec_runtime から，タスク実行開始時点での CPU 累積実行時間を，引く必要がある
         tctx->vtime += used;
         /* vtime_now を前に進める */
         u64 vtime_now = get_vtime_now(cpu);
         if (vtime_before(vtime_now, tctx->vtime)){
-            if (is_debug_task(p) && p->nr_cpus_allowed != 1){
-                bpf_printk("stopping(): CPU %d: before updating vtime_now", cpu);
-                print_vtime_now();
-            }
-
             update_vtime_now(cpu, tctx->vtime);
-
-            if (is_debug_task(p) && p->nr_cpus_allowed != 1){
-                bpf_printk("stopping(): CPU %d: After updating vtime_now", cpu);
-                print_vtime_now();
-            }
         }
         return;
     }
@@ -446,14 +440,11 @@ void BPF_STRUCT_OPS(hybrid_stopping, struct task_struct *p, bool runnable)
         /* CFS フェーズへ昇格 */
         tctx->promoted = true;
         /*
-         * 初回 vtime は現在の vtime_now に設定 (新規タスクと同等に扱う)。
-         * これにより CFS_DSQ の末尾近くに投入される。
+         * 初回 vtime は0に設定 (enqueue()で，選択された CPU の vtime で上書きされるため)
+         * これにより CFS_DSQ の末尾近くに投入される
          */
         tctx->vtime = 0;
         
-        if (is_debug_task(p) && p->nr_cpus_allowed != 1){
-            bpf_printk("PID %d is promoted to CFS\n\n", p->pid);
-        }
         stat_inc(STAT_CFS_PROMOTE);
     }
 }
