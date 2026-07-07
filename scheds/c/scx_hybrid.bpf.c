@@ -123,70 +123,60 @@ static s32 pick_cpu_by_policy(u32 target_policy, u32 rr_idx)
     s32 fallback_cpu = -1;
     u32 start;
     u32 *last;
-    s32 matched_count = 0;   /* 該当ポリシーのCPU数をカウント */
 
     if (nr_cpus == 0)
         return -1;
 
-    /* 1st pass: アイドルなCPUを優先して探す */
-    bpf_for(cpu, 0, nr_cpus) {
-        u32 key = (u32)cpu;
-        u32 *policy = bpf_map_lookup_elem(&cpu_policy_map, &key);
-
-        if (!policy || *policy != target_policy)
-            continue;
-
-        matched_count++;
-        if (fallback_cpu < 0)
-            fallback_cpu = cpu;  /* 該当ポリシーのCPUが存在することを記録 */
-
-        if (scx_bpf_test_and_clear_cpu_idle(cpu))
-            return cpu;
-    }
-
-    /* 該当ポリシーのCPUが1つも存在しない */
-    if (fallback_cpu < 0)
-        return -1;
-
-    /* 候補が1つしかないなら，それを即返す */
-    if (matched_count == 1)
-        return fallback_cpu;
-
-    /* 2nd pass: 全部busyの場合、前回選んだCPUの「次」から
-     *           ラウンドロビンで探索する */
+    /* 前回選んだ CPU の「次」から探索を始める */
     last  = bpf_map_lookup_elem(&rr_last_cpu_map, &rr_idx);
     start = last ? ((*last + 1) % nr_cpus) : 0;
 
+    /* 前回選んだ「次」から該当ポリシの CPU を探しつつ、
+     * アイドルなら即採用，busy なら最初の1件を fallback として記憶
+     * このようにする理由は，該当ポリシの CPU が全て busy な場合に，フォールバックとして選ばれるものを固定化させないため
+     */
     bpf_for(cpu, 0, nr_cpus) {
         u32 candidate = (start + (u32)cpu) % nr_cpus;
         u32 key = candidate;
         u32 *policy = bpf_map_lookup_elem(&cpu_policy_map, &key);
 
-        if (policy && *policy == target_policy) {
+        /* ポリシが一致していない場合は次ループに行く*/
+        if (!policy || *policy != target_policy){
+            continue;
+        }
+
+        /* 最初に見つかったものをフォールバックとして記録しておく*/
+        if (fallback_cpu < 0){
+            fallback_cpu = (s32)candidate;
+        }
+
+        /* アイドルな場合は，それを選ぶ*/
+        if (scx_bpf_test_and_clear_cpu_idle(candidate)) {
             u32 val = candidate;
             bpf_map_update_elem(&rr_last_cpu_map, &rr_idx, &val, BPF_ANY);
             return (s32)candidate;
         }
     }
 
-    /* ここには理論上到達しない (fallback_cpu >= 0 が保証されているため) */
+    /* 該当ポリシーのCPUが1つも存在しない */
+    if (fallback_cpu < 0)
+        return -1;
+
+    /* 全部busyだった場合、最初に見つかったCPUをfallbackとして採用 */
+    u32 val = (u32)fallback_cpu;
+    bpf_map_update_elem(&rr_last_cpu_map, &rr_idx, &val, BPF_ANY);
+   
     return fallback_cpu;
 }
 
 static inline s32 pick_fifo_cpu(void)
 {
-    s32 cpu = pick_cpu_by_policy(CPU_POLICY_FIFO, RR_IDX_FIFO);
-    bpf_printk("pick_fifo_cpu: CPU %d picked", cpu);
-    return cpu;
-    //return pick_cpu_by_policy(CPU_POLICY_FIFO, RR_IDX_FIFO);
+    return pick_cpu_by_policy(CPU_POLICY_FIFO, RR_IDX_FIFO);
 }
 
 static inline s32 pick_cfs_cpu(void)
 {
-    s32 cpu = pick_cpu_by_policy(CPU_POLICY_CFS, RR_IDX_CFS);
-    bpf_printk("pick_cfs_cpu: CPU %d picked", cpu);
-    return cpu;
-    //return pick_cpu_by_policy(CPU_POLICY_CFS, RR_IDX_CFS);
+    return pick_cpu_by_policy(CPU_POLICY_CFS, RR_IDX_CFS);
 }
 
 static __always_inline bool is_fifo_cpu(s32 cpu)
@@ -383,25 +373,14 @@ void BPF_STRUCT_OPS(hybrid_enqueue, struct task_struct *p, u64 enq_flags)
         return;
     }
 
-    s32  cpu;
-    if (is_debug_task(p)){
-        s32 fifo_cpu = pick_fifo_cpu();
-    }
-
     if (!tctx->promoted) {
         /* FIFO フェーズ */
-
         stat_inc(STAT_FIFO_ENQUEUE);
-
-        cpu = 0; // TODO: ここは，FIFO 対応の CPU を pick するようにする．例えば以下のような形
-        // s32 fifo_cpu;
-        // fifo_cpu = pick_fifo_cpu();
 
         /*
          * 関連研究では，FIFO キューはグローバルキューとして実装していたため，本実装もそのようにする
          */
-        //scx_bpf_dsq_insert(p, GLOBAL_FIFO_DSQ, preemption_slice_ns, enq_flags);
-        scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | cpu, preemption_slice_ns, enq_flags);
+        scx_bpf_dsq_insert(p, GLOBAL_FIFO_DSQ, preemption_slice_ns, enq_flags);
     } else {
         /* CFS フェーズ: vtime ベース */
 
@@ -410,10 +389,9 @@ void BPF_STRUCT_OPS(hybrid_enqueue, struct task_struct *p, u64 enq_flags)
          */
         u64 vtime = tctx->vtime;
 
-        cpu = 1; // TODO: ここは，CFS 対応の CPU を pick するようにする．例えば以下のような形
-        // s32 cfs_cpu;
-        // cfs_cpu = pick_cfs_cpu();
-        // u64 dsq_id = CFS_DSQ(cfs_cpu);
+        s32 cfs_cpu;
+        cfs_cpu = pick_cfs_cpu();
+        u64 dsq_id = CFS_DSQ(cfs_cpu);
 
         u64 vtime_now = get_vtime_now(cpu);
         // CPU マイグレーションがあった場合，vtime を新しい CPU の基準に変換する
@@ -444,7 +422,6 @@ void BPF_STRUCT_OPS(hybrid_enqueue, struct task_struct *p, u64 enq_flags)
         stat_inc(STAT_CFS_ENQUEUE);
 
         tctx->last_cpu = cpu;
-        u64 dsq_id = CFS_DSQ(cpu);
         scx_bpf_dsq_insert_vtime(p, dsq_id, preemption_slice_ns, vtime, enq_flags);
     }
 }
@@ -463,20 +440,18 @@ void BPF_STRUCT_OPS(hybrid_enqueue, struct task_struct *p, u64 enq_flags)
  */
 void BPF_STRUCT_OPS(hybrid_dispatch, s32 cpu, struct task_struct *prev)
 {
-    u64 dsq_id = CFS_DSQ(cpu);
-    bool moved = scx_bpf_dsq_move_to_local(dsq_id);
-    //if(is_fifo_cpu(cpu)){
-    //    /*
-    //     * ハンドラを呼び出した CPU がFIFO 対応の場合，グローバル FIFO DSQ のタスクを移動
-    //     */
-    //    scx_bpf_dsq_move_to_local(GLOBAL_FIFO_DSQ);
-    //}else if(is_cfs_cpu(cpu)){
-    //    /*
-    //     * ハンドラを呼び出した CPU が CFS 対応の場合，その CPU に紐づく CFS DSQ のタスクを移動
-    //     */
-    //    u64 dsq_id = CFS_DSQ(cpu);
-    //    scx_bpf_dsq_move_to_local(dsq_id);
-    //}
+    if(is_fifo_cpu(cpu)){
+        /*
+         * ハンドラを呼び出した CPU がFIFO 対応の場合，グローバル FIFO DSQ のタスクを移動
+         */
+        scx_bpf_dsq_move_to_local(GLOBAL_FIFO_DSQ);
+    }else if(is_cfs_cpu(cpu)){
+        /*
+         * ハンドラを呼び出した CPU が CFS 対応の場合，その CPU に紐づく CFS DSQ のタスクを移動
+         */
+        u64 dsq_id = CFS_DSQ(cpu);
+        scx_bpf_dsq_move_to_local(dsq_id);
+    }
 }
 
 /* ------------------------------------------------------------------ */
