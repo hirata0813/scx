@@ -93,6 +93,63 @@ static void print_stats(struct scx_hybrid *skel)
 }
 
 /* ------------------------------------------------------------------ */
+/* CPU ポリシーの設定                                                   */
+/* ------------------------------------------------------------------ */
+
+enum cpu_policy {
+    CPU_POLICY_UNSET = 0,  /* 未設定 = デフォルト値。明示的にセットされていない場合と区別するため */
+    CPU_POLICY_FIFO  = 1,
+    CPU_POLICY_CFS   = 2,
+};
+
+/*
+ * "0,1,3" のようなカンマ区切りの CPU リストをパースし、
+ * cpu_policy_map の該当 CPU エントリに policy を書き込む。
+ *
+ * 呼び出しタイミングの注意:
+ *   skel_load() の後、attach() の前に呼ぶこと。
+ *   (ops.init が attach 時に呼ばれるため、それより前に
+ *    map の中身を確定させておく必要がある)
+ */
+static int parse_cpu_list_and_set_policy(struct bpf_map *map,
+                                          const char *cpu_list_str,
+                                          uint32_t policy)
+{
+    char *str = strdup(cpu_list_str);
+    char *token;
+    int fd;
+    int ret = 0;
+
+    if (!str) {
+        fprintf(stderr, "strdup failed for cpu list \"%s\"\n", cpu_list_str);
+        return -ENOMEM;
+    }
+
+    fd = bpf_map__fd(map);
+    if (fd < 0) {
+        fprintf(stderr, "Failed to get fd for cpu_policy_map\n");
+        free(str);
+        return fd;
+    }
+
+    token = strtok(str, ",");
+    while (token) {
+        uint32_t cpu = (uint32_t)atoi(token);
+        uint32_t val = policy;
+
+        if (bpf_map_update_elem(fd, &cpu, &val, BPF_ANY)) {
+            fprintf(stderr, "Failed to set policy for cpu %u: %s\n",
+                    cpu, strerror(errno));
+            ret = -errno;
+        }
+        token = strtok(NULL, ",");
+    }
+
+    free(str);
+    return ret;
+}
+
+/* ------------------------------------------------------------------ */
 /* main                                                                 */
 /* ------------------------------------------------------------------ */
 static void usage(const char *prog)
@@ -101,6 +158,8 @@ static void usage(const char *prog)
         "Usage: %s [options]\n"
         "  --preemption-ns <ns>     FIFO time slice in nanoseconds (default: 50000)\n"
         "  --stats-interval <sec>   Stats print interval in seconds (default: 1, 0=off)\n"
+        "  --fifo-cpus <list>       FIFO-only CPUs, comma separated (e.g. \"0,1\")\n"
+        "  --cfs-cpus  <list>       CFS-only CPUs, comma separated (e.g. \"2,3\")\n"
         "  -h, --help               Show this help\n",
         prog);
 }
@@ -110,25 +169,37 @@ int main(int argc, char *argv[])
     struct scx_hybrid *skel;
     struct bpf_link        *link = NULL;
     //uint64_t preemption_ns   = 50000ULL; /* 50 µs */
-    uint64_t preemption_ns   = 10000000ULL; /* 50 µs */
+    uint64_t preemption_ns   = 10000000ULL; /* 10 ms */
     int      stats_interval  = 1;
     int      ret             = 0;
+    const char *fifo_cpus = NULL;
+    const char *cfs_cpus  = NULL;
+    int opt;
+
 
     /* ---- コマンドラインオプション ---- */
     static const struct option long_opts[] = {
         { "preemption-ns",   required_argument, NULL, 'p' },
         { "stats-interval",  required_argument, NULL, 's' },
+        { "fifo-cpus",       required_argument, NULL, 'f' },
+        { "cfs-cpus",        required_argument, NULL, 'c' },
         { "help",            no_argument,       NULL, 'h' },
         { 0 },
     };
-    int opt;
-    while ((opt = getopt_long(argc, argv, "p:s:h", long_opts, NULL)) != -1) {
+
+    while ((opt = getopt_long(argc, argv, "f:c:p:s:h", long_opts, NULL)) != -1) {
         switch (opt) {
         case 'p':
             preemption_ns = strtoull(optarg, NULL, 0);
             break;
         case 's':
             stats_interval = atoi(optarg);
+            break;
+        case 'f':
+            fifo_cpus = optarg;
+            break;
+        case 'c':
+            cfs_cpus = optarg;
             break;
         case 'h':
         default:
@@ -137,13 +208,22 @@ int main(int argc, char *argv[])
         }
     }
 
+    /* ---- CPU ポリシー引数の必須チェック ---- */
+    if (!fifo_cpus || !cfs_cpus) {
+        fprintf(stderr, "Error: --fifo-cpus and --cfs-cpus are both required.\n\n");
+        usage(argv[0]);
+        return 1;
+    }
+
     /* ---- シグナル設定 ---- */
     signal(SIGINT,  sig_handler);
     signal(SIGTERM, sig_handler);
 
     /* ---- libbpf verbosity ---- */
     libbpf_set_strict_mode(LIBBPF_STRICT_ALL);
+	unlink("/sys/fs/bpf/cpu_policy_map");
     unlink("/sys/fs/bpf/vtime_now_map");
+    unlink("/sys/fs/bpf/rr_last_cpu_map");
     unlink("/sys/fs/bpf/debug_filter");
     unlink("/sys/fs/bpf/task_ctx_stor");
     unlink("/sys/fs/bpf/stats");
@@ -159,10 +239,26 @@ int main(int argc, char *argv[])
     /* ---- preemption_slice_ns を ro-data セクションで設定 ---- */
     skel->rodata->preemption_slice_ns = preemption_ns;
 
-    /* ---- ロード & アタッチ ---- */
+    /* ---- ロード ---- */
     SCX_OPS_LOAD(skel, hybrid_ops, scx_hybrid, uei);
+
+    /* ---- CPU ポリシー map への書き込み (load後、attach前) ---- */
+    if (parse_cpu_list_and_set_policy(skel->maps.cpu_policy_map,
+                                       fifo_cpus, CPU_POLICY_FIFO)) {
+        fprintf(stderr, "Failed to set FIFO cpu policy\n");
+        ret = 1;
+        return 1;
+    }
+    if (parse_cpu_list_and_set_policy(skel->maps.cpu_policy_map,
+                                       cfs_cpus, CPU_POLICY_CFS)) {
+        fprintf(stderr, "Failed to set CFS cpu policy\n");
+        ret = 1;
+        return 1;
+    }
+
     bpf_object__pin_maps(skel->obj, "/sys/fs/bpf"); // BPF Map をピン留め
 
+    /* ---- アタッチ ---- */
     link = SCX_OPS_ATTACH(skel, hybrid_ops, scx_hybrid);
 
     printf("Hybrid sched_ext scheduler loaded.\n");

@@ -42,6 +42,7 @@ UEI_DEFINE(uei);
  *   └──── 33bit目    = 1              (DSQ種別マーカー、1ULL<<32)
  */
 #define CFS_DSQ(cpu)   ((u64)(cpu) | (1ULL << 32))
+#define GLOBAL_FIFO_DSQ 0x0ffffffff // 33bit目は0(FIFO のマーカ)，下位32bitは全て立てて，CPU番号と被らないようにしておく
 
 /* ------------------------------------------------------------------ */
 /* 設定 (ユーザー空間から BPF_MAP_TYPE_ARRAY で書き換え可能)           */
@@ -85,6 +86,124 @@ struct {
     __type(value, struct task_ctx);
 } task_ctx_stor SEC(".maps");
 
+/* ------------------------------------------------------------------ */
+/* CPU の割当ポリシを管理する Map・関数                                    */
+/* ------------------------------------------------------------------ */
+enum cpu_policy {
+    CPU_POLICY_UNSET = 0,  /* 未設定 = デフォルト値。明示的にセットされていない場合と区別するため */
+    CPU_POLICY_FIFO  = 1,
+    CPU_POLICY_CFS   = 2,
+};
+
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, 4);
+    __type(key, u32);
+    __type(value, u32);
+} cpu_policy_map SEC(".maps");
+
+// 各ポリシごとに「最後に選んだCPU」を記憶する．これは，あるポリシに対応する CPU を探す際，どれも busy だった場合に，フォールバックとして選ぶ CPU を固定させないため      */
+enum rr_idx {
+    RR_IDX_FIFO = 0,
+    RR_IDX_CFS  = 1,
+    RR_IDX_MAX  = 2,
+};
+
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, RR_IDX_MAX);
+    __type(key, u32);
+    __type(value, u32);
+} rr_last_cpu_map SEC(".maps");
+
+static s32 pick_cpu_by_policy(u32 target_policy, u32 rr_idx)
+{
+    s32 cpu;
+    u32 nr_cpus = scx_bpf_nr_cpu_ids();
+    s32 fallback_cpu = -1;
+    u32 start;
+    u32 *last;
+    s32 matched_count = 0;   /* 該当ポリシーのCPU数をカウント */
+
+    if (nr_cpus == 0)
+        return -1;
+
+    /* 1st pass: アイドルなCPUを優先して探す */
+    bpf_for(cpu, 0, nr_cpus) {
+        u32 key = (u32)cpu;
+        u32 *policy = bpf_map_lookup_elem(&cpu_policy_map, &key);
+
+        if (!policy || *policy != target_policy)
+            continue;
+
+        matched_count++;
+        if (fallback_cpu < 0)
+            fallback_cpu = cpu;  /* 該当ポリシーのCPUが存在することを記録 */
+
+        if (scx_bpf_test_and_clear_cpu_idle(cpu))
+            return cpu;
+    }
+
+    /* 該当ポリシーのCPUが1つも存在しない */
+    if (fallback_cpu < 0)
+        return -1;
+
+    /* 候補が1つしかないなら，それを即返す */
+    if (matched_count == 1)
+        return fallback_cpu;
+
+    /* 2nd pass: 全部busyの場合、前回選んだCPUの「次」から
+     *           ラウンドロビンで探索する */
+    last  = bpf_map_lookup_elem(&rr_last_cpu_map, &rr_idx);
+    start = last ? ((*last + 1) % nr_cpus) : 0;
+
+    bpf_for(cpu, 0, nr_cpus) {
+        u32 candidate = (start + (u32)cpu) % nr_cpus;
+        u32 key = candidate;
+        u32 *policy = bpf_map_lookup_elem(&cpu_policy_map, &key);
+
+        if (policy && *policy == target_policy) {
+            u32 val = candidate;
+            bpf_map_update_elem(&rr_last_cpu_map, &rr_idx, &val, BPF_ANY);
+            return (s32)candidate;
+        }
+    }
+
+    /* ここには理論上到達しない (fallback_cpu >= 0 が保証されているため) */
+    return fallback_cpu;
+}
+
+static inline s32 pick_fifo_cpu(void)
+{
+    s32 cpu = pick_cpu_by_policy(CPU_POLICY_FIFO, RR_IDX_FIFO);
+    bpf_printk("pick_fifo_cpu: CPU %d picked", cpu);
+    return cpu;
+    //return pick_cpu_by_policy(CPU_POLICY_FIFO, RR_IDX_FIFO);
+}
+
+static inline s32 pick_cfs_cpu(void)
+{
+    s32 cpu = pick_cpu_by_policy(CPU_POLICY_CFS, RR_IDX_CFS);
+    bpf_printk("pick_cfs_cpu: CPU %d picked", cpu);
+    return cpu;
+    //return pick_cpu_by_policy(CPU_POLICY_CFS, RR_IDX_CFS);
+}
+
+static __always_inline bool is_fifo_cpu(s32 cpu)
+{
+    u32 key = (u32)cpu;
+    u32 *policy = bpf_map_lookup_elem(&cpu_policy_map, &key);
+
+    return policy && *policy == CPU_POLICY_FIFO;
+}
+
+static __always_inline bool is_cfs_cpu(s32 cpu)
+{
+    u32 key = (u32)cpu;
+    u32 *policy = bpf_map_lookup_elem(&cpu_policy_map, &key);
+
+    return policy && *policy == CPU_POLICY_CFS;
+}
 
 /* ------------------------------------------------------------------ */
 /* 特定のタスクに対してのみデバッグしたいとき                                */
@@ -212,8 +331,8 @@ s32 BPF_STRUCT_OPS(hybrid_select_cpu, struct task_struct *p,
     struct task_ctx *tctx = NULL;
     tctx = bpf_task_storage_get(&task_ctx_stor, p, 0, 0);
 
-    if (!tctx) {
-        /* フォールバック: グローバル FIFO DSQ へ */
+    if (!tctx || p->nr_cpus_allowed == 1) {
+        /* フォールバック: デフォルトの CPU 選択アルゴリズムに任せる */
         cpu = scx_bpf_select_cpu_dfl(p, prev_cpu, wake_flags, &is_idle);
         return cpu;
     }
@@ -257,19 +376,17 @@ void BPF_STRUCT_OPS(hybrid_enqueue, struct task_struct *p, u64 enq_flags)
 {
     struct task_ctx *tctx = NULL;
     tctx = bpf_task_storage_get(&task_ctx_stor, p, 0, 0);
-    if (!tctx) {
-        /* フォールバック: グローバル FIFO DSQ へ */
-        scx_bpf_dsq_insert(p, SCX_DSQ_GLOBAL, preemption_slice_ns, enq_flags);
-        return;
-    }
 
-    // フォールバック処理: 許可 CPU が1つのような特別なタスクの場合は，例外としてローカルに入れる
-    if (p->nr_cpus_allowed == 1) {
+    if (!tctx || p->nr_cpus_allowed == 1) {
+        /* フォールバック: デフォルトの CPU 選択アルゴリズムに任せる */
         scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL, preemption_slice_ns, enq_flags);
         return;
     }
 
     s32  cpu;
+    if (is_debug_task(p)){
+        s32 fifo_cpu = pick_fifo_cpu();
+    }
 
     if (!tctx->promoted) {
         /* FIFO フェーズ */
@@ -279,6 +396,11 @@ void BPF_STRUCT_OPS(hybrid_enqueue, struct task_struct *p, u64 enq_flags)
         cpu = 0; // TODO: ここは，FIFO 対応の CPU を pick するようにする．例えば以下のような形
         // s32 fifo_cpu;
         // fifo_cpu = pick_fifo_cpu();
+
+        /*
+         * 関連研究では，FIFO キューはグローバルキューとして実装していたため，本実装もそのようにする
+         */
+        //scx_bpf_dsq_insert(p, GLOBAL_FIFO_DSQ, preemption_slice_ns, enq_flags);
         scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | cpu, preemption_slice_ns, enq_flags);
     } else {
         /* CFS フェーズ: vtime ベース */
@@ -332,8 +454,9 @@ void BPF_STRUCT_OPS(hybrid_enqueue, struct task_struct *p, u64 enq_flags)
 /* ------------------------------------------------------------------ */
 /*
  * CPU が実行するタスクを探す際に呼ばれる。
- * このハンドラは，CPU のローカル DSQ が空の際に呼ばれる．そのため，ローカル DSQ へエンキューする FIFO フェーズでは基本的に呼ばれず，CFS DSQ へエンキューする CFS フェーズで呼ばれる想定
- * このハンドラを呼び出した CPU に対応する CFS DSQ に入っているタスクを，その CPU のローカル DSQ に move する
+ * このハンドラは，CPU のローカル DSQ，グローバル DSQ 両方が空の際に呼ばれる．
+ * このスケジューラでは，基本的には，ローカルとグローバルのどちらにも直接エンキューしないため，このハンドラは定期的に呼び出される想定．
+ * ハンドラを呼び出した CPU に割当たっている ポリシを判定し，それに対応するカスタム DSQ から，CPU のローカルキューへタスクを move する．
  *
  * ghOSt ShortQueueSchedule() における short_queue_ 優先、
  * 次に long_cpulist 上の CFS という順序と対応する。
@@ -342,6 +465,18 @@ void BPF_STRUCT_OPS(hybrid_dispatch, s32 cpu, struct task_struct *prev)
 {
     u64 dsq_id = CFS_DSQ(cpu);
     bool moved = scx_bpf_dsq_move_to_local(dsq_id);
+    //if(is_fifo_cpu(cpu)){
+    //    /*
+    //     * ハンドラを呼び出した CPU がFIFO 対応の場合，グローバル FIFO DSQ のタスクを移動
+    //     */
+    //    scx_bpf_dsq_move_to_local(GLOBAL_FIFO_DSQ);
+    //}else if(is_cfs_cpu(cpu)){
+    //    /*
+    //     * ハンドラを呼び出した CPU が CFS 対応の場合，その CPU に紐づく CFS DSQ のタスクを移動
+    //     */
+    //    u64 dsq_id = CFS_DSQ(cpu);
+    //    scx_bpf_dsq_move_to_local(dsq_id);
+    //}
 }
 
 /* ------------------------------------------------------------------ */
@@ -491,6 +626,11 @@ s32 BPF_STRUCT_OPS_SLEEPABLE(hybrid_init)
         if (err)
             return err;
     }
+
+    // グローバルな FIFO DSQ を1つ作る
+    err = scx_bpf_create_dsq(GLOBAL_FIFO_DSQ, -1);
+    if (err)
+        return err;
 
     return 0;
 }
