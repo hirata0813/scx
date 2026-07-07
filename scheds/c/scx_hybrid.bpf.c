@@ -3,7 +3,7 @@
  * Hybrid sched_ext Scheduler
  *
  * ロジック:
- *   - タスクが最初にエンキューされたとき、FIFO DSQ (CPU のローカル DSQ) に入る。
+ *   - タスクはまず、FIFO DSQ (全 CPU で共通のカスタム DSQ) に入る。
  *   - FIFO DSQ 上のタスクは preemption_slice_ns ナノ秒間だけ実行される。
  *   - FIFO において，タイムスライスを使い切る前に終了(他タスクの割り込みや自発的スリープ)したタスクは再び FIFO に戻る。
  *   - タイムスライスを使い切って終了した(slice == 0 で stopping)タスクは，CFS ポリシ(CPU ごとに持つカスタム CFS DSQ) に格上げされ、以降は vtime ベースで
@@ -11,7 +11,7 @@
  *
  * ghOSt 実装との対応:
  *   ghOSt HybridScheduler    →  この BPF スケジューラ
- *   ShortQueueRq (FIFO)      →  FIFO_DSQ  (CPU のローカル DSQ)
+ *   ShortQueueRq (FIFO)      →  FIFO_DSQ  (全 CPU で共通のカスタム DSQ)
  *   CfsRq (vtime)            →  CFS_DSQ   (CPU ごとに持つカスタム CFS DSQ)
  *   preemption_time_slice_   →  preemption_slice_ns (ロDATA マップ経由で設定可)
  *   task->new_to_cfs         →  task_ctx->promoted (CFS へ昇格済みフラグ)
@@ -354,7 +354,7 @@ s32 BPF_STRUCT_OPS(hybrid_select_cpu, struct task_struct *p,
 /*
  * タスクを DSQ にエンキューする際に呼ばれる
  *
- * - promoted == false → FIFO が割り当てられた CPU を選び，その CPU のローカル DSQ にエンキュー (タイムスライス = preemption_slice_ns)
+ * - promoted == false → グローバル FIFO DSQ にエンキュー (タイムスライス = preemption_slice_ns)
  * - promoted == true  → CFS が割り当てられた CPU を選び，その CPU に紐付いた CFS_DSQ  に vtime ベースでエンキュー
  *
  * ghOSt:
