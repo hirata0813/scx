@@ -44,6 +44,7 @@ UEI_DEFINE(uei);
 #define CFS_DSQ(cpu)   ((u64)(cpu) | (1ULL << 32))
 #define GLOBAL_FIFO_DSQ 0x0ffffffff // 33bit目は0(FIFO のマーカ)，下位32bitは全て立てて，CPU番号と被らないようにしておく
 
+#define CFS_SCHED_SLICE_NS  4000000ULL
 /* ------------------------------------------------------------------ */
 /* 設定 (ユーザー空間から BPF_MAP_TYPE_ARRAY で書き換え可能)           */
 /* ------------------------------------------------------------------ */
@@ -77,6 +78,15 @@ struct task_ctx {
      */
     s32 last_cpu;
 
+    /* CFS フェーズで，前回実行していた CPU を記録する
+     * マイグレーションが発生した際，vtime を適切な値に更新できるようにするため
+     */
+    
+
+    u64 tasknew;
+    u64 firstrun;
+    bool is_firstrun_logged;
+    u64 taskdead;
 };
 
 struct {
@@ -327,25 +337,7 @@ s32 BPF_STRUCT_OPS(hybrid_select_cpu, struct task_struct *p,
         return cpu;
     }
 
-    if (is_debug_task(p)) {
-        if (p->nr_cpus_allowed == 1) {
-            cpu = scx_bpf_select_cpu_dfl(p, prev_cpu, wake_flags, &is_idle);
-        } else if (!tctx->promoted) {
-            cpu = 0; // デバッグ対象かつ FIFO
-	        bpf_printk("PID: %d, This is debug task. CPU=0", p->pid);
-        } else {
-            cpu = 1; // デバッグ対象かつ CFS
-	        bpf_printk("PID: %d, This is debug task. CPU=1", p->pid);
-        }
-    } else { // デバッグ対象でない
-        if (p->nr_cpus_allowed == 1) {
-            cpu = scx_bpf_select_cpu_dfl(p, prev_cpu, wake_flags, &is_idle);
-        } else {
-            cpu = 2;
-        }
-    }
-
-    return cpu;
+    return prev_cpu;
 }
 
 /* ------------------------------------------------------------------ */
@@ -393,9 +385,9 @@ void BPF_STRUCT_OPS(hybrid_enqueue, struct task_struct *p, u64 enq_flags)
         cfs_cpu = pick_cfs_cpu();
         u64 dsq_id = CFS_DSQ(cfs_cpu);
 
-        u64 vtime_now = get_vtime_now(cpu);
+        u64 vtime_now = get_vtime_now(cfs_cpu);
         // CPU マイグレーションがあった場合，vtime を新しい CPU の基準に変換する
-        if (tctx->last_cpu >= 0 && tctx->last_cpu != cpu) {
+        if (tctx->last_cpu >= 0 && tctx->last_cpu != cfs_cpu) {
             u64 old_now = get_vtime_now(tctx->last_cpu);
             // 旧 CPU での「相対的な位置」を新 CPU に移植する
             // relative = vtime - old_now  (負なら末尾より前、正なら末尾より後)
@@ -421,8 +413,8 @@ void BPF_STRUCT_OPS(hybrid_enqueue, struct task_struct *p, u64 enq_flags)
 
         stat_inc(STAT_CFS_ENQUEUE);
 
-        tctx->last_cpu = cpu;
-        scx_bpf_dsq_insert_vtime(p, dsq_id, preemption_slice_ns, vtime, enq_flags);
+        tctx->last_cpu = cfs_cpu;
+        scx_bpf_dsq_insert_vtime(p, dsq_id, CFS_SCHED_SLICE_NS, vtime, enq_flags);
     }
 }
 
@@ -471,6 +463,11 @@ void BPF_STRUCT_OPS(hybrid_running, struct task_struct *p)
     tctx = bpf_task_storage_get(&task_ctx_stor, p, 0, 0);
     if (!tctx)
         return;
+
+    if (!tctx->is_firstrun_logged){
+        tctx->firstrun               = bpf_ktime_get_ns();
+        tctx->is_firstrun_logged = 1;
+    }
 
     if (!tctx->promoted) {
         /* FIFO フェーズ: 特にやることはなし*/
@@ -581,6 +578,29 @@ void BPF_STRUCT_OPS(hybrid_enable, struct task_struct *p)
     tctx->cfs_start_runtime_ns = 0;
     tctx->vtime                 = 0;
     tctx->last_cpu              = -1; // 未設定を示す
+    tctx->tasknew               = bpf_ktime_get_ns();
+    tctx->firstrun              = 0;
+    tctx->is_firstrun_logged    = 0;
+    tctx->taskdead              = 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* ops.disable                                                        */
+/* ------------------------------------------------------------------ */
+/*
+ * タスクが終了し，sched_ext の制御下が外れるときに呼ばれる。
+ * タスクの終了時刻を記録する。
+ */
+void BPF_STRUCT_OPS(hybrid_disable, struct task_struct *p)
+{
+    struct task_ctx *tctx;
+
+    tctx = bpf_task_storage_get(&task_ctx_stor, p, 0,
+                                 BPF_LOCAL_STORAGE_GET_F_CREATE);
+    if (!tctx)
+        return;
+
+    tctx->taskdead               = bpf_ktime_get_ns();
 }
 
 /* ------------------------------------------------------------------ */
@@ -629,6 +649,7 @@ struct sched_ext_ops hybrid_ops = {
     .running    = (void *)hybrid_running,
     .stopping   = (void *)hybrid_stopping,
     .enable     = (void *)hybrid_enable,
+    .disable    = (void *)hybrid_disable,
     .init       = (void *)hybrid_init,
     .exit       = (void *)hybrid_exit,
     .name       = "hybrid",
