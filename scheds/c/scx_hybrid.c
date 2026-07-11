@@ -103,8 +103,35 @@ enum cpu_policy {
 };
 
 /*
- * "0,1,3" のようなカンマ区切りの CPU リストをパースし、
- * cpu_policy_map の該当 CPU エントリに policy を書き込む。
+ * cpu_policy_map (BPF_MAP_TYPE_ARRAY) に書き込める CPU 数の上限。
+ * BPF 側 (scx_hybrid_bpf.c) の cpu_policy_map の max_entries と一致させること。
+ * 現状 64 なので、50 個ほどの CPU を fifo/cfs 用途で管理するのに十分な余裕がある。
+ */
+#define CPU_POLICY_MAP_CAPACITY 64
+
+/*
+ * fifo/cfs のどちらにも割り当てられた CPU を記録しておくための表。
+ * fifo と cfs 両方の呼び出しをまたいで重複チェックするため、
+ * ファイルスコープ (static) で保持する。
+ * 値は CPU_POLICY_UNSET / CPU_POLICY_FIFO / CPU_POLICY_CFS のいずれか。
+ */
+static uint32_t g_cpu_assignment[CPU_POLICY_MAP_CAPACITY];
+
+/*
+ * "0,1,3" のようなカンマ区切りに加えて、"1-10" のような範囲指定にも対応した
+ * CPU リストをパースし、cpu_policy_map の該当 CPU エントリに policy を書き込む。
+ *
+ * 対応フォーマット例:
+ *   "0,1,3"        単純なカンマ区切り
+ *   "1-10"         範囲指定 (1,2,...,10 を意味する)
+ *   "0,2,5-10,12"  カンマ区切りと範囲指定の混在
+ *
+ * fifo/cfs どちらにも指定されなかった CPU は cpu_policy_map に一切書き込まれず、
+ * BPF 側で zero 初期化されたまま (CPU_POLICY_UNSET) となる。
+ * BPF 側 (hybrid_select_cpu / hybrid_enqueue) は、tctx が無い、または
+ * nr_cpus_allowed == 1 のタスクをデフォルトの CPU 選択・SCX_DSQ_LOCAL に
+ * フォールバックさせるため、そのような CPU 上で taskset 等により固定実行される
+ * ワークロード起動スクリプト等は通常通りのスケジューリングを受けられる。
  *
  * 呼び出しタイミングの注意:
  *   skel_load() の後、attach() の前に呼ぶこと。
@@ -117,8 +144,11 @@ static int parse_cpu_list_and_set_policy(struct bpf_map *map,
 {
     char *str = strdup(cpu_list_str);
     char *token;
+    char *saveptr;
     int fd;
     int ret = 0;
+    int map_capacity;
+    long nr_online_cpus;
 
     if (!str) {
         fprintf(stderr, "strdup failed for cpu list \"%s\"\n", cpu_list_str);
@@ -132,21 +162,103 @@ static int parse_cpu_list_and_set_policy(struct bpf_map *map,
         return fd;
     }
 
-    token = strtok(str, ",");
-    while (token) {
-        uint32_t cpu = (uint32_t)atoi(token);
-        uint32_t val = policy;
+    /* map の実際の max_entries を尋ね、決め打ちのマクロとズレていないか確認する */
+    map_capacity = (int)bpf_map__max_entries(map);
+    if (map_capacity <= 0 || map_capacity > CPU_POLICY_MAP_CAPACITY)
+        map_capacity = CPU_POLICY_MAP_CAPACITY;
 
-        if (bpf_map_update_elem(fd, &cpu, &val, BPF_ANY)) {
-            fprintf(stderr, "Failed to set policy for cpu %u: %s\n",
-                    cpu, strerror(errno));
-            ret = -errno;
+    nr_online_cpus = sysconf(_SC_NPROCESSORS_CONF);
+    if (nr_online_cpus <= 0)
+        nr_online_cpus = map_capacity;
+
+    token = strtok_r(str, ",", &saveptr);
+    while (token) {
+        long start, end;
+        char *dash = strchr(token, '-');
+
+        errno = 0;
+        if (dash) {
+            /* "start-end" 形式の範囲指定 */
+            *dash = '\0';
+            start = strtol(token, NULL, 10);
+            end   = strtol(dash + 1, NULL, 10);
+        } else {
+            /* 単一の CPU 番号 */
+            start = end = strtol(token, NULL, 10);
         }
-        token = strtok(NULL, ",");
+
+        if (start < 0 || end < 0 || start > end) {
+            fprintf(stderr,
+                    "Invalid cpu range \"%s\"\n", token);
+            ret = -EINVAL;
+            token = strtok_r(NULL, ",", &saveptr);
+            continue;
+        }
+
+        for (long cpu = start; cpu <= end; cpu++) {
+            uint32_t key = (uint32_t)cpu;
+            uint32_t val = policy;
+
+            if (cpu >= map_capacity) {
+                fprintf(stderr,
+                        "cpu %ld exceeds cpu_policy_map capacity (%d); "
+                        "increase max_entries in the BPF program\n",
+                        cpu, map_capacity);
+                ret = -ERANGE;
+                continue;
+            }
+            if (cpu >= nr_online_cpus) {
+                fprintf(stderr,
+                        "cpu %ld does not exist on this system "
+                        "(nproc=%ld)\n", cpu, nr_online_cpus);
+                ret = -ERANGE;
+                continue;
+            }
+            if (g_cpu_assignment[cpu] != CPU_POLICY_UNSET &&
+                g_cpu_assignment[cpu] != policy) {
+                fprintf(stderr,
+                        "cpu %ld is assigned to both --fifo-cpus and "
+                        "--cfs-cpus; a cpu can only belong to one\n", cpu);
+                ret = -EINVAL;
+                continue;
+            }
+            g_cpu_assignment[cpu] = policy;
+
+            if (bpf_map_update_elem(fd, &key, &val, BPF_ANY)) {
+                fprintf(stderr, "Failed to set policy for cpu %ld: %s\n",
+                        cpu, strerror(errno));
+                ret = -errno;
+            }
+        }
+
+        token = strtok_r(NULL, ",", &saveptr);
     }
 
     free(str);
     return ret;
+}
+
+/*
+ * fifo/cfs いずれにも割り当てられなかった CPU (= 通常通りの挙動をする CPU) の
+ * 一覧を表示する。ワークロード起動スクリプト等を taskset -c で固定して
+ * 実行したい CPU がここに含まれているか、起動時に目視確認できるようにする。
+ */
+static void print_cpu_assignment_summary(int map_capacity)
+{
+    long nr_online_cpus = sysconf(_SC_NPROCESSORS_CONF);
+    int cap = map_capacity < nr_online_cpus ? map_capacity : (int)nr_online_cpus;
+
+    printf("CPU assignment:\n");
+    for (int cpu = 0; cpu < cap; cpu++) {
+        const char *label = "normal (unset)";
+
+        if (g_cpu_assignment[cpu] == CPU_POLICY_FIFO)
+            label = "FIFO";
+        else if (g_cpu_assignment[cpu] == CPU_POLICY_CFS)
+            label = "CFS";
+
+        printf("  cpu %-3d : %s\n", cpu, label);
+    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -158,10 +270,20 @@ static void usage(const char *prog)
         "Usage: %s [options]\n"
         "  --preemption-ns <ns>     FIFO time slice in nanoseconds (default: 50000)\n"
         "  --stats-interval <sec>   Stats print interval in seconds (default: 1, 0=off)\n"
-        "  --fifo-cpus <list>       FIFO-only CPUs, comma separated (e.g. \"0,1\")\n"
-        "  --cfs-cpus  <list>       CFS-only CPUs, comma separated (e.g. \"2,3\")\n"
-        "  -h, --help               Show this help\n",
-        prog);
+        "  --fifo-cpus <list>       FIFO-only CPUs. Comma separated and/or ranges\n"
+        "                           (e.g. \"0,1\", \"1-10\", \"0,2,5-10,12\")\n"
+        "  --cfs-cpus  <list>       CFS-only CPUs. Same format as --fifo-cpus\n"
+        "                           (e.g. \"2,3\", \"20-29\")\n"
+        "  -h, --help               Show this help\n"
+        "\n"
+        "Notes:\n"
+        "  - Up to %d CPUs total can be assigned via --fifo-cpus/--cfs-cpus\n"
+        "    (cpu_policy_map capacity; comfortably covers ~50 CPUs).\n"
+        "  - A CPU can only be assigned to one of --fifo-cpus/--cfs-cpus.\n"
+        "  - CPUs not listed in either option are left unset and are\n"
+        "    scheduled normally, e.g. via a workload launch script pinned\n"
+        "    to them with `taskset -c <cpu>`.\n",
+        prog, CPU_POLICY_MAP_CAPACITY);
 }
 
 int main(int argc, char *argv[])
@@ -255,6 +377,8 @@ int main(int argc, char *argv[])
         ret = 1;
         return 1;
     }
+
+    print_cpu_assignment_summary((int)bpf_map__max_entries(skel->maps.cpu_policy_map));
 
     bpf_object__pin_maps(skel->obj, "/sys/fs/bpf"); // BPF Map をピン留め
 

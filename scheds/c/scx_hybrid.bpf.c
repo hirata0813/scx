@@ -107,7 +107,7 @@ enum cpu_policy {
 
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
-    __uint(max_entries, 4);
+    __uint(max_entries, 64); /* 50 個程度の CPU を管理できるよう余裕を持たせる */
     __type(key, u32);
     __type(value, u32);
 } cpu_policy_map SEC(".maps");
