@@ -43,14 +43,21 @@ UEI_DEFINE(uei);
  */
 #define CFS_DSQ(cpu)   ((u64)(cpu) | (1ULL << 32))
 #define GLOBAL_FIFO_DSQ 0x0ffffffff // 33bit目は0(FIFO のマーカ)，下位32bitは全て立てて，CPU番号と被らないようにしておく
+#define GLOBAL_CFS_DSQ 0x1ffffffff // --global-cfs 指定時に使う，CPU に紐付かない単一の CFS DSQ．33bit目は0(FIFO のマーカ)，下位32bitは全て立てて，CPU番号と被らないようにしておく
 
-#define CFS_SCHED_SLICE_NS  4000000ULL
+#define CFS_SCHED_SLICE_NS  10000000ULL
 /* ------------------------------------------------------------------ */
 /* 設定 (ユーザー空間から BPF_MAP_TYPE_ARRAY で書き換え可能)           */
 /* ------------------------------------------------------------------ */
 /* デフォルトのプリエンプション・タイムスライス: 50 µs (ghOSt デフォルトと同じ) */
 const volatile u64 preemption_slice_ns = 50000ULL;
 
+/*
+ * true の場合、CFS フェーズは CPU ごとの CFS_DSQ(cpu) ではなく、
+ * 全 CFS CPU で共有する単一の GLOBAL_CFS_DSQ を使う。
+ * (--global-cfs オプションでユーザー空間から設定)
+ */
+const volatile bool global_cfs = false;
 /* ------------------------------------------------------------------ */
 /* タスクごとのコンテキスト                                             */
 /* ------------------------------------------------------------------ */
@@ -273,7 +280,7 @@ static __always_inline bool vtime_before(u64 a, u64 b)
 
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
-    __uint(max_entries, 4);
+    __uint(max_entries, 64);
     __type(key, u32);
     __type(value, u64);
 } vtime_now_map SEC(".maps");
@@ -289,6 +296,34 @@ static __always_inline void update_vtime_now(s32 cpu, u64 vtime)
 {
     u32 key = (u32)cpu;
     u64 *val = bpf_map_lookup_elem(&vtime_now_map, &key);
+    if (val)
+        *val = vtime;
+}
+
+/*
+ * --global-cfs モード用の、CPU に紐付かない単一の vtime_now
+ * 実在の CPU 番号と衝突しないよう、専用の 1 要素 Map として分離
+ * (プレーンな BPF グローバル変数ではなく Map にしているのは、
+ *  他の vtime_now と同じアクセス経路に統一するため)
+ */
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, u32);
+    __type(value, u64);
+} global_vtime_now_map SEC(".maps");
+
+static __always_inline u64 get_global_vtime_now(void)
+{
+    u32 key = 0;
+    u64 *val = bpf_map_lookup_elem(&global_vtime_now_map, &key);
+    return val ? *val : 0;
+}
+
+static __always_inline void update_global_vtime_now(u64 vtime)
+{
+    u32 key = 0;
+    u64 *val = bpf_map_lookup_elem(&global_vtime_now_map, &key);
     if (val)
         *val = vtime;
 }
@@ -380,22 +415,37 @@ void BPF_STRUCT_OPS(hybrid_enqueue, struct task_struct *p, u64 enq_flags)
          * vtime は，タスクがこれまでに，実際に CPU を掴んで実行された累積時間．CFS 小さいほど「CPU をあまり使ってないので優先して実行すべき」という意味
          */
         u64 vtime = tctx->vtime;
+        u64 dsq_id;
+        u64 vtime_now;
 
-        s32 cfs_cpu;
-        cfs_cpu = pick_cfs_cpu();
-        u64 dsq_id = CFS_DSQ(cfs_cpu);
+        if (global_cfs) {
+            /*
+             * --global-cfs: 全 CFS CPU で共有する単一 DSQ を使うため、
+             * どの CPU が実際に実行するかを事前に選ぶ必要はない。
+             * vtime の基準も単一の global_vtime_now_map を使うので、
+             * CPU マイグレーションによる vtime 変換も不要になる。
+             */
+            dsq_id = GLOBAL_CFS_DSQ;
+            vtime_now = get_global_vtime_now();
+        } else {
+            s32 cfs_cpu;
+            cfs_cpu = pick_cfs_cpu();
+            dsq_id = CFS_DSQ(cfs_cpu);
 
-        u64 vtime_now = get_vtime_now(cfs_cpu);
-        // CPU マイグレーションがあった場合，vtime を新しい CPU の基準に変換する
-        if (tctx->last_cpu >= 0 && tctx->last_cpu != cfs_cpu) {
-            u64 old_now = get_vtime_now(tctx->last_cpu);
-            // 旧 CPU での「相対的な位置」を新 CPU に移植する
-            // relative = vtime - old_now  (負なら末尾より前、正なら末尾より後)
-            // new_vtime = vtime_now + relative
-            if (old_now > 0) {
-                s64 relative = (s64)(vtime - old_now);
-                vtime = (u64)((s64)vtime_now + relative);
+            vtime_now = get_vtime_now(cfs_cpu);
+            // CPU マイグレーションがあった場合，vtime を新しい CPU の基準に変換する
+            if (tctx->last_cpu >= 0 && tctx->last_cpu != cfs_cpu) {
+                u64 old_now = get_vtime_now(tctx->last_cpu);
+                // 旧 CPU での「相対的な位置」を新 CPU に移植する
+                // relative = vtime - old_now  (負なら末尾より前、正なら末尾より後)
+                // new_vtime = vtime_now + relative
+                if (old_now > 0) {
+                    s64 relative = (s64)(vtime - old_now);
+                    vtime = (u64)((s64)vtime_now + relative);
+                }
             }
+
+            tctx->last_cpu = cfs_cpu;
         }
 
         /*
@@ -413,7 +463,6 @@ void BPF_STRUCT_OPS(hybrid_enqueue, struct task_struct *p, u64 enq_flags)
 
         stat_inc(STAT_CFS_ENQUEUE);
 
-        tctx->last_cpu = cfs_cpu;
         scx_bpf_dsq_insert_vtime(p, dsq_id, CFS_SCHED_SLICE_NS, vtime, enq_flags);
     }
 }
@@ -439,9 +488,11 @@ void BPF_STRUCT_OPS(hybrid_dispatch, s32 cpu, struct task_struct *prev)
         scx_bpf_dsq_move_to_local(GLOBAL_FIFO_DSQ);
     }else if(is_cfs_cpu(cpu)){
         /*
-         * ハンドラを呼び出した CPU が CFS 対応の場合，その CPU に紐づく CFS DSQ のタスクを移動
+         * ハンドラを呼び出した CPU が CFS 対応の場合、
+         * --global-cfs なら全 CFS CPU 共有の GLOBAL_CFS_DSQ から、
+         * そうでなければ自分専用の CFS_DSQ(cpu) からタスクを移動する
          */
-        u64 dsq_id = CFS_DSQ(cpu);
+        u64 dsq_id = global_cfs ? GLOBAL_CFS_DSQ : CFS_DSQ(cpu);
         scx_bpf_dsq_move_to_local(dsq_id);
     }
 }
@@ -477,11 +528,17 @@ void BPF_STRUCT_OPS(hybrid_running, struct task_struct *p)
          */
         tctx->cfs_start_runtime_ns = p->se.sum_exec_runtime;
 
-        s32 cpu = bpf_get_smp_processor_id();
-        u64 vtime_now = get_vtime_now(cpu);
+        if (global_cfs) {
+            u64 vtime_now = get_global_vtime_now();
+            if (vtime_before(vtime_now, tctx->vtime))
+                update_global_vtime_now(tctx->vtime);
+        } else {
+            s32 cpu = bpf_get_smp_processor_id();
+            u64 vtime_now = get_vtime_now(cpu);
 
-        if (vtime_before(vtime_now, tctx->vtime)){
-            update_vtime_now(cpu, tctx->vtime);
+            if (vtime_before(vtime_now, tctx->vtime)){
+                update_vtime_now(cpu, tctx->vtime);
+            }
         }
 
     }
@@ -505,8 +562,6 @@ void BPF_STRUCT_OPS(hybrid_stopping, struct task_struct *p, bool runnable)
 {
     struct task_ctx *tctx;
 
-    s32 cpu = bpf_get_smp_processor_id();
-
     tctx = bpf_task_storage_get(&task_ctx_stor, p, 0, 0);
     if (!tctx)
         return;
@@ -520,9 +575,16 @@ void BPF_STRUCT_OPS(hybrid_stopping, struct task_struct *p, bool runnable)
                                                                         // つまり，p->se.sum_exec_runtime から，タスク実行開始時点での CPU 累積実行時間を，引く必要がある
         tctx->vtime += used;
         /* vtime_now を前に進める */
-        u64 vtime_now = get_vtime_now(cpu);
-        if (vtime_before(vtime_now, tctx->vtime)){
-            update_vtime_now(cpu, tctx->vtime);
+        if (global_cfs) {
+            u64 vtime_now = get_global_vtime_now();
+            if (vtime_before(vtime_now, tctx->vtime))
+                update_global_vtime_now(tctx->vtime);
+        } else {
+            s32 cpu = bpf_get_smp_processor_id();
+            u64 vtime_now = get_vtime_now(cpu);
+            if (vtime_before(vtime_now, tctx->vtime)){
+                update_vtime_now(cpu, tctx->vtime);
+            }
         }
         return;
     }
@@ -547,7 +609,7 @@ void BPF_STRUCT_OPS(hybrid_stopping, struct task_struct *p, bool runnable)
         /* CFS フェーズへ昇格 */
         tctx->promoted = true;
         /*
-         * 初回 vtime は0に設定 (enqueue()で，選択された CPU の vtime で上書きされるため)
+         * 初回 vtime は0に設定 (enqueue()で，選択された CFS DSQ の vtime_now を基準にクランプされるため)
          * これにより CFS_DSQ の末尾近くに投入される
          */
         tctx->vtime = 0;
@@ -615,11 +677,18 @@ s32 BPF_STRUCT_OPS_SLEEPABLE(hybrid_init)
     s32 err;
     u32 nr_cpu_ids = scx_bpf_nr_cpu_ids();
 
-    // CPU 個数分だけ，各 CPU 専用の CFS 用キューを作る
-    bpf_for(cpu, 0, nr_cpu_ids) {
-        err = scx_bpf_create_dsq(CFS_DSQ(cpu), -1);
+    if (global_cfs) {
+        // --global-cfs: 全 CFS CPU で共有する DSQ を1つだけ作る
+        err = scx_bpf_create_dsq(GLOBAL_CFS_DSQ, -1);
         if (err)
             return err;
+    } else {
+        // CPU 個数分だけ，各 CPU 専用の CFS 用キューを作る
+        bpf_for(cpu, 0, nr_cpu_ids) {
+            err = scx_bpf_create_dsq(CFS_DSQ(cpu), -1);
+            if (err)
+                return err;
+        }
     }
 
     // グローバルな FIFO DSQ を1つ作る

@@ -24,6 +24,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <string.h>
 #include <unistd.h>
 #include <signal.h>
@@ -274,6 +275,9 @@ static void usage(const char *prog)
         "                           (e.g. \"0,1\", \"1-10\", \"0,2,5-10,12\")\n"
         "  --cfs-cpus  <list>       CFS-only CPUs. Same format as --fifo-cpus\n"
         "                           (e.g. \"2,3\", \"20-29\")\n"
+        "  --global-cfs             Use a single global CFS DSQ shared by all\n"
+        "                           CFS CPUs, instead of one CFS DSQ per CPU\n"
+        "                           (default: off, i.e. one CFS DSQ per CPU)\n"
         "  -h, --help               Show this help\n"
         "\n"
         "Notes:\n"
@@ -296,6 +300,7 @@ int main(int argc, char *argv[])
     int      ret             = 0;
     const char *fifo_cpus = NULL;
     const char *cfs_cpus  = NULL;
+    int      global_cfs   = 0;
     int opt;
 
 
@@ -305,11 +310,12 @@ int main(int argc, char *argv[])
         { "stats-interval",  required_argument, NULL, 's' },
         { "fifo-cpus",       required_argument, NULL, 'f' },
         { "cfs-cpus",        required_argument, NULL, 'c' },
+        { "global-cfs",      no_argument,       NULL, 'g' },
         { "help",            no_argument,       NULL, 'h' },
         { 0 },
     };
 
-    while ((opt = getopt_long(argc, argv, "f:c:p:s:h", long_opts, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "f:c:p:s:gh", long_opts, NULL)) != -1) {
         switch (opt) {
         case 'p':
             preemption_ns = strtoull(optarg, NULL, 0);
@@ -322,6 +328,9 @@ int main(int argc, char *argv[])
             break;
         case 'c':
             cfs_cpus = optarg;
+            break;
+        case 'g':
+            global_cfs = 1;
             break;
         case 'h':
         default:
@@ -344,6 +353,7 @@ int main(int argc, char *argv[])
     /* ---- libbpf verbosity ---- */
     libbpf_set_strict_mode(LIBBPF_STRICT_ALL);
 	unlink("/sys/fs/bpf/cpu_policy_map");
+	unlink("/sys/fs/bpf/global_vtime_now_map");
     unlink("/sys/fs/bpf/vtime_now_map");
     unlink("/sys/fs/bpf/rr_last_cpu_map");
     unlink("/sys/fs/bpf/debug_filter");
@@ -360,6 +370,7 @@ int main(int argc, char *argv[])
 
     /* ---- preemption_slice_ns を ro-data セクションで設定 ---- */
     skel->rodata->preemption_slice_ns = preemption_ns;
+    skel->rodata->global_cfs = global_cfs ? true : false;
 
     /* ---- ロード ---- */
     SCX_OPS_LOAD(skel, hybrid_ops, scx_hybrid, uei);
@@ -388,6 +399,9 @@ int main(int argc, char *argv[])
     printf("Hybrid sched_ext scheduler loaded.\n");
     printf("  preemption_slice_ns = %lu ns (%.3f ms)\n",
            preemption_ns, (double)preemption_ns / 1e6);
+    printf("  CFS DSQ mode        = %s\n",
+           global_cfs ? "global (shared across all CFS cpus)"
+                      : "per-cpu (one CFS DSQ per cpu)");
     printf("Press Ctrl-C to unload.\n\n");
 
     /* ---- メインループ ---- */
