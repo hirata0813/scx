@@ -36,10 +36,13 @@
 #include <libgen.h>
 #include <bpf/bpf.h>
 #include <scx/common.h>
+#include <sys/stat.h>
 
 /* BPF スケルトン (bpftool gen skeleton で生成) */
 #include "scx_hybrid.bpf.skel.h"
 
+/* Map をピンするディレクトリ */
+#define BPF_FS_HYBRID_DIR "/sys/fs/bpf/scx_hybrid"
 /* ------------------------------------------------------------------ */
 /* グローバル変数                                                       */
 /* ------------------------------------------------------------------ */
@@ -352,18 +355,24 @@ int main(int argc, char *argv[])
 
     /* ---- libbpf verbosity ---- */
     libbpf_set_strict_mode(LIBBPF_STRICT_ALL);
-	unlink("/sys/fs/bpf/cpu_policy_map");
-	unlink("/sys/fs/bpf/global_vtime_now_map");
-    unlink("/sys/fs/bpf/vtime_now_map");
-    unlink("/sys/fs/bpf/rr_last_cpu_map");
-    unlink("/sys/fs/bpf/debug_filter");
-    unlink("/sys/fs/bpf/task_ctx_stor");
-    unlink("/sys/fs/bpf/stats");
-	unlink("/sys/fs/bpf/_data_uei_dump");
-	unlink("/sys/fs/bpf/hybrid_ops");
-	unlink("/sys/fs/bpf/scx_hybr_bss");
-	unlink("/sys/fs/bpf/scx_hybr_data");
-	unlink("/sys/fs/bpf/scx_hybr_rodata");
+
+    /* ---- 以前の Map を unlink ---- */
+    mkdir(BPF_FS_HYBRID_DIR, 0700);
+	unlink(BPF_FS_HYBRID_DIR "/tasknew_map");
+	unlink(BPF_FS_HYBRID_DIR "/firstrun_map");
+	unlink(BPF_FS_HYBRID_DIR "/taskdead_map");
+	unlink(BPF_FS_HYBRID_DIR "/cpu_policy_map");
+	unlink(BPF_FS_HYBRID_DIR "/global_vtime_now_map");
+    unlink(BPF_FS_HYBRID_DIR "/vtime_now_map");
+    unlink(BPF_FS_HYBRID_DIR "/rr_last_cpu_map");
+    unlink(BPF_FS_HYBRID_DIR "/debug_filter");
+    unlink(BPF_FS_HYBRID_DIR "/task_ctx_stor");
+    unlink(BPF_FS_HYBRID_DIR "/stats");
+	unlink(BPF_FS_HYBRID_DIR "/_data_uei_dump");
+	unlink(BPF_FS_HYBRID_DIR "/hybrid_ops");
+	unlink(BPF_FS_HYBRID_DIR "/scx_hybr_bss");
+	unlink(BPF_FS_HYBRID_DIR "/scx_hybr_data");
+	unlink(BPF_FS_HYBRID_DIR "/scx_hybr_rodata");
 
     /* ---- BPF オブジェクトを開く ---- */
     skel = SCX_OPS_OPEN(hybrid_ops, scx_hybrid);
@@ -391,7 +400,7 @@ int main(int argc, char *argv[])
 
     print_cpu_assignment_summary((int)bpf_map__max_entries(skel->maps.cpu_policy_map));
 
-    bpf_object__pin_maps(skel->obj, "/sys/fs/bpf"); // BPF Map をピン留め
+    bpf_object__pin_maps(skel->obj, BPF_FS_HYBRID_DIR); // BPF Map をピン留め
 
     /* ---- アタッチ ---- */
     link = SCX_OPS_ATTACH(skel, hybrid_ops, scx_hybrid);

@@ -42,9 +42,13 @@
 #include <sys/types.h>
 #include <bpf/bpf.h>
 #include <scx/common.h>
+#include <sys/stat.h>
 
 /* BPF スケルトン (bpftool gen skeleton で生成) */
 #include "scx_null.bpf.skel.h"
+
+/* Map をピンするディレクトリ */
+#define BPF_FS_NULL_DIR "/sys/fs/bpf/scx_null"
 
 /* ------------------------------------------------------------------ */
 /* グローバル変数                                                       */
@@ -147,14 +151,20 @@ int main(int argc, char *argv[])
 
     /* ---- libbpf verbosity ---- */
     libbpf_set_strict_mode(LIBBPF_STRICT_ALL);
-    unlink("/sys/fs/bpf/debug_filter");
-    unlink("/sys/fs/bpf/task_ctx_stor");
-    unlink("/sys/fs/bpf/stats");
-    unlink("/sys/fs/bpf/_data_uei_dump");
-    unlink("/sys/fs/bpf/null_ops");
-    unlink("/sys/fs/bpf/scx_null_bss");
-    unlink("/sys/fs/bpf/scx_null_data");
-    unlink("/sys/fs/bpf/scx_null_rodata");
+
+    /* ---- 以前の Map を unlink ---- */
+    mkdir(BPF_FS_NULL_DIR, 0700);
+	unlink(BPF_FS_NULL_DIR "/tasknew_map");
+	unlink(BPF_FS_NULL_DIR "/firstrun_map");
+	unlink(BPF_FS_NULL_DIR "/taskdead_map");
+    unlink(BPF_FS_NULL_DIR "/debug_filter");
+    unlink(BPF_FS_NULL_DIR "/task_ctx_stor");
+    unlink(BPF_FS_NULL_DIR "/stats");
+    unlink(BPF_FS_NULL_DIR "/_data_uei_dump");
+    unlink(BPF_FS_NULL_DIR "/null_ops");
+    unlink(BPF_FS_NULL_DIR "/scx_null_bss");
+    unlink(BPF_FS_NULL_DIR "/scx_null_data");
+    unlink(BPF_FS_NULL_DIR "/scx_null_rodata");
 
     /* ---- BPF オブジェクトを開く ---- */
     skel = SCX_OPS_OPEN(null_ops, scx_null);
@@ -162,7 +172,7 @@ int main(int argc, char *argv[])
     /* ---- ロード ---- */
     SCX_OPS_LOAD(skel, null_ops, scx_null, uei);
 
-    bpf_object__pin_maps(skel->obj, "/sys/fs/bpf"); // BPF Map をピン留め
+    bpf_object__pin_maps(skel->obj, BPF_FS_NULL_DIR); // BPF Map をピン留め
 
     /* ---- アタッチ ---- */
     link = SCX_OPS_ATTACH(skel, null_ops, scx_null);

@@ -118,6 +118,30 @@ static __always_inline void stat_inc(enum stat_idx idx)
 }
 
 /* ------------------------------------------------------------------ */
+/* 各タスクのメトリクスを保持する BPF Map                                  */
+/* ------------------------------------------------------------------ */
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 65536);
+    __type(key, pid_t);
+    __type(value, u64);
+} tasknew_map SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 65536);
+    __type(key, pid_t);
+    __type(value, u64);
+} firstrun_map SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 65536);
+    __type(key, pid_t);
+    __type(value, u64);
+} taskdead_map SEC(".maps");
+
+/* ------------------------------------------------------------------ */
 /* ops.enable                                                           */
 /* ------------------------------------------------------------------ */
 /*
@@ -221,11 +245,11 @@ void BPF_STRUCT_OPS(null_disable, struct task_struct *p)
 
     stat_inc(STAT_DISABLE);
 
-    if (is_debug_task(p)) {
-        u64 lifetime_ns = tctx->taskdead - tctx->tasknew;
-
-        bpf_printk("[scx_null] disable   pid=%d comm=%s lifetime_ns=%llu",
-                   p->pid, p->comm, lifetime_ns);
+    if (bpf_strncmp(p->comm, sizeof(p->comm), "launch_function") == 0) {
+        pid_t pid = p->pid;
+        bpf_map_update_elem(&tasknew_map, &pid, &tctx->tasknew, BPF_ANY);
+        bpf_map_update_elem(&firstrun_map, &pid, &tctx->firstrun, BPF_ANY);
+        bpf_map_update_elem(&taskdead_map, &pid, &tctx->taskdead, BPF_ANY);
     }
 }
 

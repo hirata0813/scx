@@ -104,6 +104,30 @@ struct {
 } task_ctx_stor SEC(".maps");
 
 /* ------------------------------------------------------------------ */
+/* 各タスクのメトリクスを保持する BPF Map                                  */
+/* ------------------------------------------------------------------ */
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 65536);
+    __type(key, pid_t);
+    __type(value, u64);
+} tasknew_map SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 65536);
+    __type(key, pid_t);
+    __type(value, u64);
+} firstrun_map SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 65536);
+    __type(key, pid_t);
+    __type(value, u64);
+} taskdead_map SEC(".maps");
+
+/* ------------------------------------------------------------------ */
 /* CPU の割当ポリシを管理する Map・関数                                    */
 /* ------------------------------------------------------------------ */
 enum cpu_policy {
@@ -663,6 +687,12 @@ void BPF_STRUCT_OPS(hybrid_disable, struct task_struct *p)
         return;
 
     tctx->taskdead               = bpf_ktime_get_ns();
+    if (bpf_strncmp(p->comm, sizeof(p->comm), "launch_function") == 0) {
+        pid_t pid = p->pid;
+        bpf_map_update_elem(&tasknew_map, &pid, &tctx->tasknew, BPF_ANY);
+        bpf_map_update_elem(&firstrun_map, &pid, &tctx->firstrun, BPF_ANY);
+        bpf_map_update_elem(&taskdead_map, &pid, &tctx->taskdead, BPF_ANY);
+    }
 }
 
 /* ------------------------------------------------------------------ */
