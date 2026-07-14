@@ -393,9 +393,18 @@ s32 BPF_STRUCT_OPS(hybrid_select_cpu, struct task_struct *p,
     if (!tctx || p->nr_cpus_allowed == 1) {
         /* フォールバック: デフォルトの CPU 選択アルゴリズムに任せる */
         cpu = scx_bpf_select_cpu_dfl(p, prev_cpu, wake_flags, &is_idle);
-        return cpu;
+        if (is_idle) {
+		    scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL, SCX_SLICE_DFL, 0);
+	    }
     }
 
+    if (bpf_strncmp(p->comm, sizeof(p->comm), "launch_function") != 0) {
+        cpu = 16;
+        bpf_printk("select_cpu(): pid:%d, comm:%s, cpu:%d", p->pid, p->comm, cpu);
+        if (is_idle) {
+		    scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL, SCX_SLICE_DFL, 0);
+	    }
+    }
     return prev_cpu;
 }
 
