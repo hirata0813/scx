@@ -358,6 +358,7 @@ int main(int argc, char *argv[])
 
     /* ---- 以前の Map を unlink ---- */
     mkdir(BPF_FS_HYBRID_DIR, 0700);
+	unlink(BPF_FS_HYBRID_DIR "/_rodata_str1_1");
 	unlink(BPF_FS_HYBRID_DIR "/tasknew_map");
 	unlink(BPF_FS_HYBRID_DIR "/firstrun_map");
 	unlink(BPF_FS_HYBRID_DIR "/taskdead_map");

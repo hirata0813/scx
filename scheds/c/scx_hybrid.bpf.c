@@ -220,6 +220,11 @@ static inline s32 pick_cfs_cpu(void)
     return pick_cpu_by_policy(CPU_POLICY_CFS, RR_IDX_CFS);
 }
 
+static inline s32 pick_other_cpu(void)
+{
+    return pick_cpu_by_policy(CPU_POLICY_UNSET, RR_IDX_CFS);
+}
+
 static __always_inline bool is_fifo_cpu(s32 cpu)
 {
     u32 key = (u32)cpu;
@@ -396,15 +401,18 @@ s32 BPF_STRUCT_OPS(hybrid_select_cpu, struct task_struct *p,
         if (is_idle) {
 		    scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL, SCX_SLICE_DFL, 0);
 	    }
+        return cpu;
     }
 
-    if (bpf_strncmp(p->comm, sizeof(p->comm), "launch_function") != 0) {
-        cpu = 16;
-        bpf_printk("select_cpu(): pid:%d, comm:%s, cpu:%d", p->pid, p->comm, cpu);
-        if (is_idle) {
-		    scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL, SCX_SLICE_DFL, 0);
-	    }
+    // ワークロード起動スクリプトは別 CPU で実行
+    if (is_debug_task(p)) {
+        //cpu = pick_other_cpu();
+        cpu = 20;
+        //bpf_printk("select_cpu(): pid:%d, comm:%s, cpu:%d", p->pid, p->comm, cpu);
+		scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | cpu, SCX_SLICE_DFL, SCX_ENQ_PREEMPT);
+        return cpu;
     }
+
     return prev_cpu;
 }
 
@@ -430,6 +438,16 @@ void BPF_STRUCT_OPS(hybrid_enqueue, struct task_struct *p, u64 enq_flags)
     if (!tctx || p->nr_cpus_allowed == 1) {
         /* フォールバック: デフォルトの CPU 選択アルゴリズムに任せる */
         scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL, preemption_slice_ns, enq_flags);
+        return;
+    }
+
+    // ワークロード起動スクリプトは別 CPU で実行
+    if (is_debug_task(p)) {
+        //cpu = pick_other_cpu();
+        s32 cpu = 20;
+        bpf_printk("enqueue(): pid:%d, comm:%s, cpu:%d", p->pid, p->comm, cpu);
+	    scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | cpu, SCX_SLICE_DFL, 0);
+        //scx_bpf_kick_cpu(cpu, SCX_KICK_IDLE);
         return;
     }
 
@@ -543,6 +561,12 @@ void BPF_STRUCT_OPS(hybrid_dispatch, s32 cpu, struct task_struct *prev)
 void BPF_STRUCT_OPS(hybrid_running, struct task_struct *p)
 {
     struct task_ctx *tctx;
+
+    s32 cpu2 = bpf_get_smp_processor_id();
+    if (is_debug_task(p)) {
+        //cpu = pick_other_cpu();
+        bpf_printk("running(): pid:%d, comm:%s, cpu:%d", p->pid, p->comm, cpu2);
+    }
 
     tctx = bpf_task_storage_get(&task_ctx_stor, p, 0, 0);
     if (!tctx)
@@ -760,5 +784,6 @@ struct sched_ext_ops hybrid_ops = {
     .disable    = (void *)hybrid_disable,
     .init       = (void *)hybrid_init,
     .exit       = (void *)hybrid_exit,
+    //.flags      = SCX_OPS_SWITCH_PARTIAL,
     .name       = "hybrid",
 };
