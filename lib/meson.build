@@ -28,7 +28,7 @@ test_sources = ['arena.bpf.c', 'bitmap.bpf.c', 'cpumask.bpf.c', 'sdt_alloc.bpf.c
 scx_lib_test_obj = static_library('scxlib_test',
   test_sources,
   include_directories: include_directories(['.', 'scxtest']),
-  c_args: scx_test_c_args,
+  c_args: scx_test_c_args + ['-std=gnu17'],
   dependencies: [kernel_dep, libbpf_dep, user_c_dep, scxtest_dep],
 )
 
