@@ -361,6 +361,7 @@ int main(int argc, char *argv[])
 	unlink(BPF_FS_HYBRID_DIR "/_rodata_str1_1");
 	unlink(BPF_FS_HYBRID_DIR "/tasknew_map");
 	unlink(BPF_FS_HYBRID_DIR "/firstrun_map");
+	unlink(BPF_FS_HYBRID_DIR "/real_firstrun_map");
 	unlink(BPF_FS_HYBRID_DIR "/taskdead_map");
 	unlink(BPF_FS_HYBRID_DIR "/cpu_policy_map");
 	unlink(BPF_FS_HYBRID_DIR "/global_vtime_now_map");

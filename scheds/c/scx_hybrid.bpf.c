@@ -92,7 +92,9 @@ struct task_ctx {
 
     u64 tasknew;
     u64 firstrun;
+    u64 real_firstrun;
     bool is_firstrun_logged;
+    bool is_realfirstrun_logged;
     bool is_enqueue_passed;
     u64 taskdead;
 };
@@ -120,6 +122,13 @@ struct {
     __type(key, pid_t);
     __type(value, u64);
 } firstrun_map SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 65536);
+    __type(key, pid_t);
+    __type(value, u64);
+} real_firstrun_map SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
@@ -563,6 +572,13 @@ void BPF_STRUCT_OPS(hybrid_running, struct task_struct *p)
     if (!tctx)
         return;
 
+    // 本来の firstrun
+    if (tctx->is_enqueue_passed == 0 && !tctx->is_realfirstrun_logged){
+        tctx->real_firstrun               = bpf_ktime_get_ns();
+        tctx->is_realfirstrun_logged = 1;
+    }
+
+    // enqueue()を一度通過した後の firstrun
     if (tctx->is_enqueue_passed == 1 && !tctx->is_firstrun_logged){
         tctx->firstrun               = bpf_ktime_get_ns();
         tctx->is_firstrun_logged = 1;
@@ -696,7 +712,9 @@ void BPF_STRUCT_OPS(hybrid_enable, struct task_struct *p)
     tctx->last_cpu              = -1; // 未設定を示す
     tctx->tasknew               = bpf_ktime_get_ns();
     tctx->firstrun              = 0;
+    tctx->real_firstrun         = 0;
     tctx->is_firstrun_logged    = 0;
+    tctx->is_realfirstrun_logged    = 0;
     tctx->is_enqueue_passed     = 0;
     tctx->taskdead              = 0;
     
@@ -724,6 +742,7 @@ void BPF_STRUCT_OPS(hybrid_disable, struct task_struct *p)
         pid_t pid = p->pid;
         bpf_map_update_elem(&tasknew_map, &pid, &tctx->tasknew, BPF_ANY);
         bpf_map_update_elem(&firstrun_map, &pid, &tctx->firstrun, BPF_ANY);
+        bpf_map_update_elem(&real_firstrun_map, &pid, &tctx->real_firstrun, BPF_ANY);
         bpf_map_update_elem(&taskdead_map, &pid, &tctx->taskdead, BPF_ANY);
     }
     bpf_printk("disable(): pid:%d, comm:%s", p->pid, p->comm);
