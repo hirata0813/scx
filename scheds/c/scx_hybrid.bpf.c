@@ -451,18 +451,19 @@ void BPF_STRUCT_OPS(hybrid_enqueue, struct task_struct *p, u64 enq_flags)
         return;
     }
     tctx->is_enqueue_passed = 1;
+    bpf_printk("enqueue(): pid:%d, comm:%s, scx.slice:%llu", p->pid, p->comm, p->scx.slice);
 
     if (!tctx->promoted) {
         /* FIFO フェーズ */
         stat_inc(STAT_FIFO_ENQUEUE);
-        bpf_printk("enqueue(): FIFO: pid:%d, comm:%s", p->pid, p->comm);
+        bpf_printk("enqueue(): FIFO: pid:%d, comm:%s, scx.slice:%llu", p->pid, p->comm, p->scx.slice);
 
         /*
          * 関連研究では，FIFO キューはグローバルキューとして実装していたため，本実装もそのようにする
          */
         scx_bpf_dsq_insert(p, GLOBAL_FIFO_DSQ, preemption_slice_ns, enq_flags);
     } else {
-        bpf_printk("enqueue(): CFS: pid:%d, comm:%s", p->pid, p->comm);
+        bpf_printk("enqueue(): CFS: pid:%d, comm:%s, scx.slice:%llu", p->pid, p->comm, p->scx.slice);
         /* CFS フェーズ: vtime ベース */
 
         /* CFS フェーズでは，vtime の小さい順にスケジューリングされる
@@ -718,7 +719,7 @@ void BPF_STRUCT_OPS(hybrid_enable, struct task_struct *p)
     tctx->is_enqueue_passed     = 0;
     tctx->taskdead              = 0;
     
-    bpf_printk("enable(): pid:%d, comm:%s", p->pid, p->comm);
+    bpf_printk("enable(): pid:%d, comm:%s, scx.slice:%llu", p->pid, p->comm, p->scx.slice);
 }
 
 /* ------------------------------------------------------------------ */
