@@ -62,7 +62,8 @@ enum stat_idx {
     STAT_CFS_PROMOTE    = 1,
     STAT_CFS_ENQUEUE    = 2,
     STAT_DIRECT_DISPATCH = 3,
-    STAT_MAX            = 4,
+    STAT_ENABLE_INVOKE = 4,
+    STAT_MAX            = 5,
 };
 
 static const char *stat_names[STAT_MAX] = {
@@ -70,6 +71,7 @@ static const char *stat_names[STAT_MAX] = {
     [STAT_CFS_PROMOTE]     = "cfs_promote    ",
     [STAT_CFS_ENQUEUE]     = "cfs_enqueue    ",
     [STAT_DIRECT_DISPATCH] = "direct_dispatch",
+    [STAT_ENABLE_INVOKE] = "enable_invoke",
 };
 
 /* ------------------------------------------------------------------ */
