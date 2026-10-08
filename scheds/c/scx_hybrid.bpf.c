@@ -724,7 +724,7 @@ void BPF_STRUCT_OPS(hybrid_enable, struct task_struct *p)
     tctx->taskdead              = 0;
 
     stat_inc(STAT_ENABLE_INVOKE);
-    bpf_printk("enable(): pid:%d, comm:%s, scx.slice:%llu", p->pid, p->comm, p->scx.slice);
+    bpf_printk("enable(): pid:%d, comm:%s, scx.slice:%llu, on_cpu:%d, on_rq: %d", p->pid, p->comm, p->scx.slice, p->on_cpu, p->on_rq);
 }
 
 /* ------------------------------------------------------------------ */
