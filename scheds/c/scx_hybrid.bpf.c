@@ -417,12 +417,12 @@ s32 BPF_STRUCT_OPS(hybrid_select_cpu, struct task_struct *p,
         return cpu;
     }
 
-    // ワークロード起動スクリプトは別 CPU で実行
+    // ワークロードジェネレータは別 CPU で実行
     if (is_debug_task(p)) {
         //cpu = pick_other_cpu();
-        cpu = 20;
-        //bpf_printk("select_cpu(): pid:%d, comm:%s, cpu:%d", p->pid, p->comm, cpu);
-		scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | cpu, SCX_SLICE_DFL, SCX_ENQ_PREEMPT);
+        cpu = 31;
+        bpf_printk("select_cpu(): generator: pid:%d, comm:%s, cpu:%d", p->pid, p->comm, cpu);
+	scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | cpu, SCX_SLICE_DFL, SCX_ENQ_PREEMPT);
         return cpu;
     }
     bpf_printk("select_cpu(): pid:%d, comm:%s, scx.slice:%llu", p->pid, p->comm, p->scx.slice);
@@ -456,6 +456,14 @@ void BPF_STRUCT_OPS(hybrid_enqueue, struct task_struct *p, u64 enq_flags)
         return;
     }
     tctx->is_enqueue_passed = 1;
+
+    // ワークロードジェネレータは別 CPU で実行
+    if (is_debug_task(p)) {
+        s32 cpu = 31;
+        bpf_printk("enqueue(): generator: pid:%d, comm:%s, cpu:%d", p->pid, p->comm, cpu);
+	scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | cpu, SCX_SLICE_DFL, SCX_ENQ_PREEMPT);
+	return;
+    }
 
     if (!tctx->promoted) {
         /* FIFO フェーズ */
@@ -577,6 +585,12 @@ void BPF_STRUCT_OPS(hybrid_running, struct task_struct *p)
     if (!tctx)
         return;
 
+    // ワークロードジェネレータは特になにもしない
+    if (is_debug_task(p)) {
+        bpf_printk("running(): generator: pid:%d, comm:%s, cpu:%d, scx.slice:%llu", p->pid, p->comm, cpu2, p->scx.slice);
+	return;
+    }
+
     // 本来の firstrun
     if (tctx->is_enqueue_passed == 0 && !tctx->is_realfirstrun_logged){
         tctx->real_firstrun               = bpf_ktime_get_ns();
@@ -637,6 +651,11 @@ void BPF_STRUCT_OPS(hybrid_stopping, struct task_struct *p, bool runnable)
     if (!tctx)
         return;
     s32 cpu2 = bpf_get_smp_processor_id();
+
+    if (is_debug_task(p)) {
+        bpf_printk("stopping(): generator: pid:%d, comm:%s, cpu:%d, scx.slice:%llu", p->pid, p->comm, cpu2, p->scx.slice);
+	return;
+    }
 
     if (tctx->promoted) {
         bpf_printk("stopping(): CFS: pid:%d, comm:%s, cpu:%d, scx.slice:%llu, pass:%d", p->pid, p->comm, cpu2, p->scx.slice, tctx->is_enqueue_passed);
