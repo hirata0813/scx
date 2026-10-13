@@ -25,7 +25,9 @@
  * ユーザー空間ローダーは hybrid_scx.c を参照。
  */
 
+#include "vmlinux.h"
 #include <scx/common.bpf.h>
+#include <bpf/bpf_helpers.h>
 
 char _license[] SEC("license") = "GPL";
 UEI_DEFINE(uei);
@@ -51,6 +53,8 @@ UEI_DEFINE(uei);
 /* ------------------------------------------------------------------ */
 /* デフォルトのプリエンプション・タイムスライス: 50 µs (ghOSt デフォルトと同じ) */
 const volatile u64 preemption_slice_ns = 50000ULL;
+
+const volatile u64 SCX_INTERRUPT_TS = 20000000ULL;
 
 /*
  * true の場合、CFS フェーズは CPU ごとの CFS_DSQ(cpu) ではなく、
@@ -88,10 +92,10 @@ struct task_ctx {
     /* CFS フェーズで，前回実行していた CPU を記録する
      * マイグレーションが発生した際，vtime を適切な値に更新できるようにするため
      */
-    
 
     u64 tasknew;
     u64 firstrun;
+    u64 at_least_once_run;
     u64 real_firstrun;
     bool is_firstrun_logged;
     bool is_realfirstrun_logged;
@@ -410,10 +414,10 @@ s32 BPF_STRUCT_OPS(hybrid_select_cpu, struct task_struct *p,
         /* フォールバック: デフォルトの CPU 選択アルゴリズムに任せる */
         cpu = scx_bpf_select_cpu_dfl(p, prev_cpu, wake_flags, &is_idle);
         if (is_idle) {
-                    bpf_printk("select_cpu(): fallback: inserting: pid:%d, comm:%s, scx.slice:%llu", p->pid, p->comm, p->scx.slice);
+                    //bpf_printk("select_cpu(): fallback: inserting: pid:%d, comm:%s, scx.slice:%llu", p->pid, p->comm, p->scx.slice);
 		    scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL, SCX_SLICE_DFL, 0);
 	    }
-        bpf_printk("select_cpu(): fallback: pid:%d, comm:%s, scx.slice:%llu", p->pid, p->comm, p->scx.slice);
+        //bpf_printk("select_cpu(): fallback: pid:%d, comm:%s, scx.slice:%llu", p->pid, p->comm, p->scx.slice);
         return cpu;
     }
 
@@ -421,11 +425,11 @@ s32 BPF_STRUCT_OPS(hybrid_select_cpu, struct task_struct *p,
     if (is_debug_task(p)) {
         //cpu = pick_other_cpu();
         cpu = 31;
-        bpf_printk("select_cpu(): generator: pid:%d, comm:%s, cpu:%d", p->pid, p->comm, cpu);
+        //bpf_printk("select_cpu(): generator: pid:%d, comm:%s, cpu:%d", p->pid, p->comm, cpu);
 	scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | cpu, SCX_SLICE_DFL, SCX_ENQ_PREEMPT);
         return cpu;
     }
-    bpf_printk("select_cpu(): pid:%d, comm:%s, scx.slice:%llu", p->pid, p->comm, p->scx.slice);
+    //bpf_printk("select_cpu(): pid:%d, comm:%s, scx.slice:%llu", p->pid, p->comm, p->scx.slice);
 
     return prev_cpu;
 }
@@ -451,31 +455,39 @@ void BPF_STRUCT_OPS(hybrid_enqueue, struct task_struct *p, u64 enq_flags)
 
     if (!tctx || p->nr_cpus_allowed == 1) {
         /* フォールバック: デフォルトの CPU 選択アルゴリズムに任せる */
-        bpf_printk("enqueue(): fallback: pid:%d, comm:%s, scx.slice:%llu, allow:%d", p->pid, p->comm, p->scx.slice, p->nr_cpus_allowed);
-        scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL, preemption_slice_ns, enq_flags);
+        //bpf_printk("enqueue(): fallback: pid:%d, comm:%s, scx.slice:%llu, allow:%d", p->pid, p->comm, p->scx.slice, p->nr_cpus_allowed);
+        scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL, SCX_SLICE_DFL, enq_flags);
         return;
     }
-    tctx->is_enqueue_passed = 1;
 
     // ワークロードジェネレータは別 CPU で実行
     if (is_debug_task(p)) {
         s32 cpu = 31;
-        bpf_printk("enqueue(): generator: pid:%d, comm:%s, cpu:%d", p->pid, p->comm, cpu);
+        //bpf_printk("enqueue(): generator: pid:%d, comm:%s, cpu:%d", p->pid, p->comm, cpu);
 	scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | cpu, SCX_SLICE_DFL, SCX_ENQ_PREEMPT);
 	return;
     }
 
+    // まだ1度も run してない場合，ランダムに CPU を選択し，20ms 割り込ませて実行
+    if (!tctx->at_least_once_run && (bpf_strncmp(p->comm, sizeof(p->comm), "taskset") == 0 || bpf_strncmp(p->comm, sizeof(p->comm), "launch_function") == 0)) {
+        //bpf_printk("enqueue(): interrupt: pid:%d, comm:%s", p->pid, p->comm);
+	__u32 random_cpu = bpf_get_prandom_u32() % 28; // FIFO/CFS CPU の中から選択
+        scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | random_cpu, SCX_INTERRUPT_TS, SCX_ENQ_HEAD); // プリエンプションのフラグだと，現在動いているフィボナッチタスクも止めてしまい，ET に影響を及ぼす
+	return;
+    }
+
+    tctx->is_enqueue_passed = 1; // ランダムな CPU 割当による割込実行を終え，FIFO/CFS のハイブリッドスケジューリングに入る
     if (!tctx->promoted) {
         /* FIFO フェーズ */
         stat_inc(STAT_FIFO_ENQUEUE);
-        bpf_printk("enqueue(): FIFO: pid:%d, comm:%s, scx.slice:%llu, allow:%d", p->pid, p->comm, p->scx.slice, p->nr_cpus_allowed);
+        //bpf_printk("enqueue(): FIFO: pid:%d, comm:%s, scx.slice:%llu, allow:%d", p->pid, p->comm, p->scx.slice, p->nr_cpus_allowed);
 
         /*
          * 関連研究では，FIFO キューはグローバルキューとして実装していたため，本実装もそのようにする
          */
         scx_bpf_dsq_insert(p, GLOBAL_FIFO_DSQ, preemption_slice_ns, enq_flags);
     } else {
-        bpf_printk("enqueue(): CFS: pid:%d, comm:%s, scx.slice:%llu, allow:%d", p->pid, p->comm, p->scx.slice, p->nr_cpus_allowed);
+        //bpf_printk("enqueue(): CFS: pid:%d, comm:%s, scx.slice:%llu, allow:%d", p->pid, p->comm, p->scx.slice, p->nr_cpus_allowed);
         /* CFS フェーズ: vtime ベース */
 
         /* CFS フェーズでは，vtime の小さい順にスケジューリングされる
@@ -590,17 +602,17 @@ void BPF_STRUCT_OPS(hybrid_running, struct task_struct *p)
 
     // ワークロードジェネレータは特になにもしない
     if (is_debug_task(p)) {
-        bpf_printk("running(): generator: pid:%d, comm:%s, cpu:%d, scx.slice:%llu, allow:%d", p->pid, p->comm, cpu2, p->scx.slice, p->nr_cpus_allowed);
+        //bpf_printk("running(): generator: pid:%d, comm:%s, cpu:%d, scx.slice:%llu, allow:%d", p->pid, p->comm, cpu2, p->scx.slice, p->nr_cpus_allowed);
 	return;
     }
 
-    // 本来の firstrun
+    // 20ms 割込時の firstrun
     if (tctx->is_enqueue_passed == 0 && !tctx->is_realfirstrun_logged){
         tctx->real_firstrun               = bpf_ktime_get_ns();
         tctx->is_realfirstrun_logged = 1;
     }
 
-    // enqueue()を一度通過した後の firstrun
+    // 20ms 割込を終えた後の firstrun
     if (tctx->is_enqueue_passed == 1 && !tctx->is_firstrun_logged){
         tctx->firstrun               = bpf_ktime_get_ns();
         tctx->is_firstrun_logged = 1;
@@ -608,9 +620,9 @@ void BPF_STRUCT_OPS(hybrid_running, struct task_struct *p)
 
     if (!tctx->promoted) {
         /* FIFO フェーズ: 特にやることはなし*/
-        bpf_printk("running(): FIFO: pid:%d, comm:%s, cpu:%d, scx.slice:%llu, pass:%d, allow:%d", p->pid, p->comm, cpu2, p->scx.slice, tctx->is_enqueue_passed, p->nr_cpus_allowed);
+        //bpf_printk("running(): FIFO: pid:%d, comm:%s, cpu:%d, scx.slice:%llu, allow:%d", p->pid, p->comm, cpu2, p->scx.slice, p->nr_cpus_allowed);
     } else {
-        bpf_printk("running(): CFS: pid:%d, comm:%s, cpu:%d, scx.slice:%llu, pass:%d, allow:%d", p->pid, p->comm, cpu2, p->scx.slice, tctx->is_enqueue_passed, p->nr_cpus_allowed);
+        //bpf_printk("running(): CFS: pid:%d, comm:%s, cpu:%d, scx.slice:%llu, allow:%d", p->pid, p->comm, cpu2, p->scx.slice, p->nr_cpus_allowed);
         /* CFS フェーズ: スライス開始時点での CPU 累積実行時間を記録し，vtime_now を最新化
          *              CPU 累積実行時間を記録するのは，stopping() で，そのスライスでの CPU 利用時間を計算し，タスクの vtime を更新するため
          */
@@ -661,12 +673,19 @@ void BPF_STRUCT_OPS(hybrid_stopping, struct task_struct *p, bool runnable)
 
     // ワークロードジェネレータは特になにもしない
     if (is_debug_task(p)) {
-        bpf_printk("stopping(): generator: pid:%d, comm:%s, cpu:%d, scx.slice:%llu, runnable=%d, allow:%d", p->pid, p->comm, cpu2, p->scx.slice, runnable, p->nr_cpus_allowed);
+        //bpf_printk("stopping(): generator: pid:%d, comm:%s, cpu:%d, scx.slice:%llu, runnable=%d, allow:%d", p->pid, p->comm, cpu2, p->scx.slice, runnable, p->nr_cpus_allowed);
 	return;
     }
 
+    // まだ taskset のときにフラグを立てると，割込実行が実質行われない
+    // 最初は，taskset が実行される(enqueue ではフォールバック処理を通過)．このとき，stopping のフォールバック処理に引っかかってくれれば良いのだが，どうやら CPU アフィニティはすぐに更新されるため，ここまで到達してしまう
+    // このため，まだ割込実行が行われていないのに，フラグが立ってしまう．したがって，taskset のときはフラグは立てないようにする
+    if (bpf_strncmp(p->comm, sizeof(p->comm), "taskset") != 0) {
+	tctx->at_least_once_run         = 1;
+    }
+
     if (tctx->promoted) {
-        bpf_printk("stopping(): CFS: pid:%d, comm:%s, cpu:%d, scx.slice:%llu, pass:%d, allow:%d", p->pid, p->comm, cpu2, p->scx.slice, tctx->is_enqueue_passed, p->nr_cpus_allowed);
+        //bpf_printk("stopping(): CFS: pid:%d, comm:%s, cpu:%d, scx.slice:%llu, allow:%d", p->pid, p->comm, cpu2, p->scx.slice, p->nr_cpus_allowed);
         /*
          * CFS フェーズ: 実際に消費した CPU 時間を vtime に反映。
          * nice 値対応が必要なら inverse_weight を掛け算する。
@@ -705,10 +724,10 @@ void BPF_STRUCT_OPS(hybrid_stopping, struct task_struct *p, bool runnable)
      *      p->scx.slice == 0 は，与えられたタイムスライスを使い果たしたことを示す
      *      p->scx.slice > 0 は，他の高優先度タスク(カーネルスレッドなど)に割り込まれたか，自発的にブロックしたかのどちらか
      */
-    bpf_printk("stopping(): FIFO: pid:%d, comm:%s, cpu:%d, scx.slice:%llu, pass:%d, allow:%d", p->pid, p->comm, cpu2, p->scx.slice, tctx->is_enqueue_passed, p->nr_cpus_allowed);
+    //bpf_printk("stopping(): FIFO: pid:%d, comm:%s, cpu:%d, scx.slice:%llu, allow:%d", p->pid, p->comm, cpu2, p->scx.slice, p->nr_cpus_allowed);
     if (runnable && p->scx.slice == 0 && tctx->is_enqueue_passed == 1) {
         /* CFS フェーズへ昇格 */
-        bpf_printk("stopping(): FIFO -> CFS: pid:%d, comm:%s, cpu:%d, scx.slice:%llu, pass:%d, allow:%d", p->pid, p->comm, cpu2, p->scx.slice, tctx->is_enqueue_passed, p->nr_cpus_allowed);
+        //bpf_printk("stopping(): FIFO -> CFS: pid:%d, comm:%s, cpu:%d, scx.slice:%llu, pass:%d, allow:%d", p->pid, p->comm, cpu2, p->scx.slice, p->nr_cpus_allowed);
         tctx->promoted = true;
         /*
          * 初回 vtime は0に設定 (enqueue()で，選択された CFS DSQ の vtime_now を基準にクランプされるため)
@@ -745,13 +764,14 @@ void BPF_STRUCT_OPS(hybrid_enable, struct task_struct *p)
     tctx->tasknew               = bpf_ktime_get_ns();
     tctx->firstrun              = 0;
     tctx->real_firstrun         = 0;
+    tctx->at_least_once_run         = 0;
     tctx->is_firstrun_logged    = 0;
     tctx->is_realfirstrun_logged    = 0;
     tctx->is_enqueue_passed     = 0;
     tctx->taskdead              = 0;
 
     stat_inc(STAT_ENABLE_INVOKE);
-    bpf_printk("enable(): pid:%d, comm:%s, scx.slice:%llu, on_cpu:%d, on_rq: %d", p->pid, p->comm, p->scx.slice, p->on_cpu, p->on_rq);
+    //bpf_printk("enable(): pid:%d, comm:%s, scx.slice:%llu, on_cpu:%d, on_rq: %d", p->pid, p->comm, p->scx.slice, p->on_cpu, p->on_rq);
 }
 
 /* ------------------------------------------------------------------ */
@@ -778,7 +798,7 @@ void BPF_STRUCT_OPS(hybrid_disable, struct task_struct *p)
         bpf_map_update_elem(&real_firstrun_map, &pid, &tctx->real_firstrun, BPF_ANY);
         bpf_map_update_elem(&taskdead_map, &pid, &tctx->taskdead, BPF_ANY);
     }
-    bpf_printk("disable(): pid:%d, comm:%s", p->pid, p->comm);
+    //bpf_printk("disable(): pid:%d, comm:%s", p->pid, p->comm);
 }
 
 /* ------------------------------------------------------------------ */
