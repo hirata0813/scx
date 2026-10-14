@@ -3,7 +3,7 @@
 
 #c_scheds = ['scx_ctrl', 'myscx_simple', 'scx_simple', 'scx_qmap', 'scx_central',
 #            'scx_flatcg', 'scx_pair']
-c_scheds = ['scx_hybrid', 'scx_null', 'scx_priority']
+c_scheds = ['scx_hybrid', 'scx_hybridv2', 'scx_null', 'scx_priority']
 
 c_scheds_lib = ['scx_sdt']
 
