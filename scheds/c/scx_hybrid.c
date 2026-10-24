@@ -369,7 +369,7 @@ int main(int argc, char *argv[])
 	unlink(BPF_FS_HYBRID_DIR "/global_vtime_now_map");
     unlink(BPF_FS_HYBRID_DIR "/vtime_now_map");
     unlink(BPF_FS_HYBRID_DIR "/rr_last_cpu_map");
-    unlink(BPF_FS_HYBRID_DIR "/debug_filter");
+    unlink(BPF_FS_HYBRID_DIR "/managed_pids");
     unlink(BPF_FS_HYBRID_DIR "/task_ctx_stor");
     unlink(BPF_FS_HYBRID_DIR "/stats");
 	unlink(BPF_FS_HYBRID_DIR "/_data_uei_dump");
